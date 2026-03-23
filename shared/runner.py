@@ -1,0 +1,105 @@
+import torch
+import os
+from dataclasses import dataclass
+from sklearn.metrics import accuracy_score, f1_score
+from transformers import Trainer, TrainingArguments, DataCollatorWithPadding
+from transformers.trainer_utils import EvalPrediction
+import time
+
+@dataclass
+class TrainConfig:
+    epochs: int = 3
+    per_device_train_bs: int = 2
+    per_device_eval_bs: int = 2
+    grad_accum_steps: int = 8
+    lr: float = 2e-5
+    weight_decay: float = 0.01
+    warmup_ratio: float = 0.10
+
+def preprocess_logits_for_metrics(logits, labels):
+    if isinstance(logits, (tuple, list)):
+        logits = logits[0]
+    return logits.argmax(dim=-1)
+
+def compute_metrics(eval_pred):
+    if isinstance(eval_pred, EvalPrediction):
+        preds, labels = eval_pred.predictions, eval_pred.label_ids
+    else:
+        preds, labels = eval_pred
+    return {"accuracy": accuracy_score(labels, preds), "f1": f1_score(labels, preds)}
+
+def device_flags():
+    use_cuda = torch.cuda.is_available()
+    use_mps = getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
+    fp16 = False
+    bf16 = False
+    torch_compile = False
+    if use_cuda:
+        fp16 = True
+        bf16 = torch.cuda.is_bf16_supported()
+    return fp16, bf16, torch_compile, use_mps
+
+def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, callbacks=None):
+    fp16, bf16, torch_compile, use_mps = device_flags()
+    eval_accum = 1 if use_mps else 8
+    
+    out_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "benchmarks", exp_name))
+    os.makedirs(out_dir, exist_ok=True)
+
+    args = TrainingArguments(
+        output_dir=out_dir,
+        num_train_epochs=cfg.epochs,
+        per_device_train_batch_size=cfg.per_device_train_bs,
+        per_device_eval_batch_size=cfg.per_device_eval_bs,
+        gradient_accumulation_steps=cfg.grad_accum_steps,
+        learning_rate=cfg.lr,
+        weight_decay=cfg.weight_decay,
+        warmup_ratio=cfg.warmup_ratio,
+        lr_scheduler_type="cosine",
+        max_grad_norm=1.0,
+        logging_strategy="steps",
+        logging_steps=20,
+        eval_strategy="epoch",
+        save_strategy="no",
+        report_to="none",
+        fp16=fp16,
+        bf16=bf16,
+        remove_unused_columns=False,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
+        gradient_checkpointing=False,
+        torch_compile=torch_compile,
+        optim="adamw_torch",
+        eval_accumulation_steps=eval_accum,
+    )
+
+    collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=64)
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=ds["train"],
+        eval_dataset=ds["validation"],
+        tokenizer=tokenizer,
+        data_collator=collator,
+        compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        callbacks=callbacks if callbacks else []
+    )
+
+    print(f"[{exp_name}] Starting training...", flush=True)
+    start_time = time.time()
+    train_res = trainer.train()
+    train_time = time.time() - start_time
+    
+    print(f"[{exp_name}] Evaluating...", flush=True)
+    eval_res = trainer.evaluate()
+    
+    res_path = os.path.join(out_dir, "results.txt")
+    with open(res_path, "w") as f:
+        f.write(f"Experiment: {exp_name}\n")
+        f.write(f"Training Time: {train_time:.2f} seconds\n")
+        f.write(f"Train Metrics: {train_res.metrics}\n")
+        f.write(f"Eval Metrics: {eval_res}\n")
+
+    print(f"[{exp_name}] Final Eval: {eval_res}")
+    return eval_res
