@@ -1,0 +1,4 @@
+Experiment: exp_2_lightning_hybrid
+Training Time: 83.62 seconds
+Train Metrics: {'train_runtime': 83.4989, 'train_samples_per_second': 2.395, 'train_steps_per_second': 0.156, 'total_flos': 0.0, 'train_loss': 5.20188727745643, 'epoch': 1.0}
+Eval Metrics: {'eval_loss': 0.6038751006126404, 'eval_accuracy': 0.76, 'eval_f1': 0.6666666666666666, 'eval_runtime': 4.3171, 'eval_samples_per_second': 11.582, 'eval_steps_per_second': 5.791, 'epoch': 1.0}
