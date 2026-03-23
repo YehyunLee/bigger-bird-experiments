@@ -21,7 +21,14 @@ def main():
     ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=256)
     
     train_cfg = TrainConfig(epochs=1, lr=3e-5)
-    run_experiment("exp_4_pbs_attn", model, tokenizer, ds, train_cfg)
+    run_experiment(
+        "exp_4_pbs_attn", 
+        model, 
+        tokenizer, 
+        ds, 
+        train_cfg,
+        extra_meta={"block_size": 64, "num_blocks": 2}
+    )
 
 if __name__ == "__main__":
     try:

@@ -21,7 +21,14 @@ def main():
     ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=256)
     
     train_cfg = TrainConfig(epochs=1, lr=3e-5)
-    run_experiment("exp_2_lightning_hybrid", model, tokenizer, ds, train_cfg)
+    run_experiment(
+        "exp_2_lightning_hybrid", 
+        model, 
+        tokenizer, 
+        ds, 
+        train_cfg,
+        extra_meta={"block_size": 128}
+    )
 
 if __name__ == "__main__":
     try:

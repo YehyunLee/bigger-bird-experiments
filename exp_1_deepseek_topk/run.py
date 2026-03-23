@@ -26,7 +26,14 @@ def main():
     
     # 4. Run experiment
     train_cfg = TrainConfig(epochs=1, lr=3e-5)
-    run_experiment("exp_1_deepseek_topk", model, tokenizer, ds, train_cfg)
+    run_experiment(
+        "exp_1_deepseek_topk", 
+        model, 
+        tokenizer, 
+        ds, 
+        train_cfg,
+        extra_meta={"top_k": 64, "low_rank_dim": 16}
+    )
 
 if __name__ == "__main__":
     try:

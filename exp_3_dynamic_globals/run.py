@@ -26,7 +26,14 @@ def main():
     
     # 4. Run experiment
     train_cfg = TrainConfig(epochs=1, lr=3e-5)
-    run_experiment("exp_3_dynamic_globals", model, tokenizer, ds, train_cfg)
+    run_experiment(
+        "exp_3_dynamic_globals", 
+        model, 
+        tokenizer, 
+        ds, 
+        train_cfg,
+        extra_meta={"window_size": 64, "num_globals": 16}
+    )
 
 if __name__ == "__main__":
     try:
