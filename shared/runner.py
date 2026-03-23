@@ -1,10 +1,12 @@
 import torch
 import os
+import time
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score, f1_score
 from transformers import Trainer, TrainingArguments, DataCollatorWithPadding
 from transformers.trainer_utils import EvalPrediction
-import time
+import json
+from datetime import datetime
 
 @dataclass
 class TrainConfig:
@@ -39,7 +41,7 @@ def device_flags():
         bf16 = torch.cuda.is_bf16_supported()
     return fp16, bf16, torch_compile, use_mps
 
-def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, callbacks=None):
+def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_meta: dict = None, callbacks=None):
     fp16, bf16, torch_compile, use_mps = device_flags()
     eval_accum = 1 if use_mps else 8
     
@@ -94,12 +96,49 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, callba
     print(f"[{exp_name}] Evaluating...", flush=True)
     eval_res = trainer.evaluate()
     
+    # 📝 Prepare Rich Metadata and Structured Results
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results = {
+        "experiment_metadata": {
+            "name": exp_name,
+            "timestamp": timestamp,
+            "training_config": {
+                "epochs": cfg.epochs,
+                "batch_size": cfg.per_device_train_bs,
+                "accumulation_steps": cfg.grad_accum_steps,
+                "learning_rate": cfg.lr,
+                "warmup": cfg.warmup_ratio
+            },
+            "dataset_info": {
+                "train_size": len(ds["train"]),
+                "eval_size": len(ds["validation"]),
+                "max_seq_len": ds["train"][0]["input_ids"].shape[0] if "input_ids" in ds["train"][0] else "unknown"
+            },
+            "environment": {
+                "use_mps": use_mps,
+                "fp16": fp16
+            },
+            "model_config": extra_meta or {}
+        },
+        "performance_metrics": {
+            "training_time_seconds": train_time,
+            "train": train_res.metrics,
+            "eval": eval_res
+        }
+    }
+    
+    # Save as timestamped JSON for scaling law analysis
+    json_path = os.path.join(out_dir, f"eval_{timestamp}.json")
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=4)
+    
+    # Also update the legacy results.txt for quick human check
     res_path = os.path.join(out_dir, "results.txt")
     with open(res_path, "w") as f:
-        f.write(f"Experiment: {exp_name}\n")
-        f.write(f"Training Time: {train_time:.2f} seconds\n")
-        f.write(f"Train Metrics: {train_res.metrics}\n")
-        f.write(f"Eval Metrics: {eval_res}\n")
+        f.write(f"Experiment: {exp_name} | Date: {timestamp}\n")
+        f.write(f"Training Time: {train_time:.2f}s\n")
+        f.write(f"Accuracy: {eval_res.get('eval_accuracy', 'N/A')}\n")
+        f.write(f"F1: {eval_res.get('eval_f1', 'N/A')}\n")
 
-    print(f"[{exp_name}] Final Eval: {eval_res}")
+    print(f"[{exp_name}] Results exported to {json_path}")
     return eval_res
