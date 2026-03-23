@@ -77,7 +77,9 @@ class DynamicGlobalAttention(BartAttention):
             
             if attention_mask is not None:
                 global_mask = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
-                if global_mask.dim() == 4: global_mask = global_mask.squeeze(1).squeeze(1) # [B, T]
+                if global_mask.dim() == 4:
+                    # In BART, 4D is [B, 1, Tq, Tk]. We slice to get [B, Tk] (token-level mask)
+                    global_mask = global_mask[:, 0, 0, :] 
                 global_scores = global_scores.masked_fill(~global_mask, -1e9)
             
             _, global_idx = torch.topk(global_scores, k=self.num_globals, dim=-1) # [B, G]
