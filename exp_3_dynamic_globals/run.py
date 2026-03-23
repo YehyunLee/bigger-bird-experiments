@@ -21,8 +21,8 @@ def main():
     model = PatchedModel(base_model, window_size=64, num_globals=16) 
     
     # 3. Build dataset
-    data_cfg = DataConfig(train_samples=1000, eval_samples=250, max_length=512) 
-    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=512)
+    data_cfg = DataConfig(train_samples=200, eval_samples=50, max_length=256) 
+    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=256)
     
     # 4. Run experiment
     train_cfg = TrainConfig(epochs=1, lr=3e-5)
