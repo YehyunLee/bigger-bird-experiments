@@ -1,4 +1,4 @@
-Experiment: exp_1_deepseek_topk
-Training Time: 222.22 seconds
-Train Metrics: {'train_runtime': 222.1174, 'train_samples_per_second': 0.9, 'train_steps_per_second': 0.059, 'total_flos': 0.0, 'train_loss': 5.151991037222055, 'epoch': 1.0}
-Eval Metrics: {'eval_loss': 0.6052595376968384, 'eval_accuracy': 0.68, 'eval_f1': 0.6363636363636364, 'eval_runtime': 14.1073, 'eval_samples_per_second': 3.544, 'eval_steps_per_second': 1.772, 'epoch': 1.0}
+Experiment: exp_1_deepseek_topk | Date: 20260323_155549
+Training Time: 223.70s
+Accuracy: 0.58
+F1: 0.676923076923077

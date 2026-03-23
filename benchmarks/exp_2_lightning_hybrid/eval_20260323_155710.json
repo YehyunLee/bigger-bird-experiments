@@ -1,0 +1,45 @@
+{
+    "experiment_metadata": {
+        "name": "exp_2_lightning_hybrid",
+        "timestamp": "20260323_155710",
+        "training_config": {
+            "epochs": 1,
+            "batch_size": 2,
+            "accumulation_steps": 8,
+            "learning_rate": 3e-05,
+            "warmup": 0.1
+        },
+        "dataset_info": {
+            "train_size": 200,
+            "eval_size": 50,
+            "max_seq_len": 256
+        },
+        "environment": {
+            "use_mps": true,
+            "fp16": false
+        },
+        "model_config": {
+            "block_size": 128
+        }
+    },
+    "performance_metrics": {
+        "training_time_seconds": 66.86256980895996,
+        "train": {
+            "train_runtime": 66.7512,
+            "train_samples_per_second": 2.996,
+            "train_steps_per_second": 0.195,
+            "total_flos": 0.0,
+            "train_loss": 4.939049353966346,
+            "epoch": 1.0
+        },
+        "eval": {
+            "eval_loss": 0.6430306434631348,
+            "eval_accuracy": 0.58,
+            "eval_f1": 0.5333333333333333,
+            "eval_runtime": 3.9706,
+            "eval_samples_per_second": 12.593,
+            "eval_steps_per_second": 6.296,
+            "epoch": 1.0
+        }
+    }
+}

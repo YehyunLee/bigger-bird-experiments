@@ -1,4 +1,4 @@
-Experiment: exp_3_dynamic_globals
-Training Time: 236.17 seconds
-Train Metrics: {'train_runtime': 236.0485, 'train_samples_per_second': 0.847, 'train_steps_per_second': 0.055, 'total_flos': 0.0, 'train_loss': 5.171920189490685, 'epoch': 1.0}
-Eval Metrics: {'eval_loss': 0.6376215219497681, 'eval_accuracy': 0.68, 'eval_f1': 0.5789473684210527, 'eval_runtime': 12.5043, 'eval_samples_per_second': 3.999, 'eval_steps_per_second': 1.999, 'epoch': 1.0}
+Experiment: exp_3_dynamic_globals | Date: 20260323_160217
+Training Time: 278.23s
+Accuracy: 0.66
+F1: 0.5405405405405406
