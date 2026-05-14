@@ -17,7 +17,7 @@ except ImportError:
     print("Install matplotlib and numpy: pip install matplotlib numpy")
     exit(1)
 
-BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "benchmarks")
+BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "..", "benchmarks")
 
 @dataclass
 class ScalingRun:

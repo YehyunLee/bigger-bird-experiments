@@ -14,7 +14,7 @@ try:
 except ImportError:
     HAS_MATPLOTLIB = False
 
-BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "benchmarks")
+BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "..", "benchmarks")
 
 @dataclass
 class ExperimentResult:

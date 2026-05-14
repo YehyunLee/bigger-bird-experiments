@@ -16,7 +16,7 @@ except ImportError:
     print("Install matplotlib: pip install matplotlib")
     exit(1)
 
-BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "benchmarks")
+BENCHMARK_DIR = os.path.join(os.path.dirname(__file__), "..", "benchmarks")
 
 @dataclass
 class TrainingRun:
