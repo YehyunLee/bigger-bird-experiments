@@ -20,12 +20,12 @@ def main():
     # We select 64 tokens dynamically per query instead of 800
     model = PatchedModel(base_model, top_k=64) 
     
-    # 3. Build dataset
-    data_cfg = DataConfig(train_samples=200, eval_samples=50, max_length=256) 
-    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=256)
-    
-    # 4. Run experiment
-    train_cfg = TrainConfig(epochs=1, lr=3e-5)
+    # 3. Build dataset (BIGGER RUN: full IMDb default config)
+    data_cfg = DataConfig(train_samples=6000, eval_samples=1000, max_length=768)
+    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=None)
+
+    # 4. Run experiment (3 epochs to capture training trajectory)
+    train_cfg = TrainConfig(epochs=3, lr=3e-5)
     run_experiment(
         "exp_1_deepseek_topk", 
         model, 

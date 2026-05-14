@@ -20,12 +20,12 @@ def main():
     # W=64 limits local block context. G=16 lets it broadcast the 16 most important tokens globally.
     model = PatchedModel(base_model, window_size=64, num_globals=16) 
     
-    # 3. Build dataset
-    data_cfg = DataConfig(train_samples=200, eval_samples=50, max_length=256) 
-    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=256)
-    
-    # 4. Run experiment
-    train_cfg = TrainConfig(epochs=1, lr=3e-5)
+    # 3. Build dataset (BIGGER RUN: full IMDb default config)
+    data_cfg = DataConfig(train_samples=6000, eval_samples=1000, max_length=768)
+    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=None)
+
+    # 4. Run experiment (3 epochs to capture training trajectory)
+    train_cfg = TrainConfig(epochs=3, lr=3e-5)
     run_experiment(
         "exp_3_dynamic_globals", 
         model, 

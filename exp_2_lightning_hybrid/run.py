@@ -17,10 +17,12 @@ def main():
     # 2. Patch with Lightning Hybrid
     model = PatchedModel(base_model, block_size=128) 
     
-    data_cfg = DataConfig(train_samples=200, eval_samples=50, max_length=256) 
-    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=256)
-    
-    train_cfg = TrainConfig(epochs=1, lr=3e-5)
+    # Build dataset (BIGGER RUN: full IMDb default config)
+    data_cfg = DataConfig(train_samples=6000, eval_samples=1000, max_length=768)
+    ds = build_imdb_dataset(tokenizer, data_cfg, fixed_length=None)
+
+    # Run experiment (3 epochs to capture training trajectory)
+    train_cfg = TrainConfig(epochs=3, lr=3e-5)
     run_experiment(
         "exp_2_lightning_hybrid", 
         model, 
