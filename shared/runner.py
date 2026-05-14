@@ -3,7 +3,7 @@ import os
 import time
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score, f1_score
-from transformers import Trainer, TrainingArguments, DataCollatorWithPadding
+from transformers import Trainer, TrainingArguments, DataCollatorWithPadding, TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 import json
 from datetime import datetime
@@ -41,6 +41,23 @@ def device_flags():
         bf16 = torch.cuda.is_bf16_supported()
     return fp16, bf16, torch_compile, use_mps
 
+class TrajectoryCallback(TrainerCallback):
+    """Callback to capture per-epoch/step metrics for trajectory visualization."""
+    def __init__(self):
+        self.trajectory = []
+    
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
+        if metrics:
+            point = {
+                "epoch": state.epoch,
+                "step": state.global_step,
+                "train_loss": state.log_history[-1].get("loss", None) if state.log_history else None,
+                "eval_loss": metrics.get("eval_loss", None),
+                "eval_accuracy": metrics.get("eval_accuracy", None),
+                "eval_f1": metrics.get("eval_f1", None),
+            }
+            self.trajectory.append(point)
+
 def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_meta: dict = None, callbacks=None):
     fp16, bf16, torch_compile, use_mps = device_flags()
     eval_accum = 1 if use_mps else 8
@@ -75,6 +92,10 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         eval_accumulation_steps=eval_accum,
     )
 
+    # Setup trajectory tracking
+    traj_callback = TrajectoryCallback()
+    all_callbacks = [traj_callback] + (callbacks if callbacks else [])
+    
     collator = DataCollatorWithPadding(tokenizer=tokenizer, pad_to_multiple_of=64)
     trainer = Trainer(
         model=model,
@@ -85,7 +106,7 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         data_collator=collator,
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-        callbacks=callbacks if callbacks else []
+        callbacks=all_callbacks
     )
 
     print(f"[{exp_name}] Starting training...", flush=True)
@@ -123,7 +144,8 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         "performance_metrics": {
             "training_time_seconds": train_time,
             "train": train_res.metrics,
-            "eval": eval_res
+            "eval": eval_res,
+            "trajectory": traj_callback.trajectory
         }
     }
     
