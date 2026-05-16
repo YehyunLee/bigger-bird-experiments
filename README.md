@@ -254,6 +254,22 @@ The project is organized to facilitate fair and consistent benchmarking across d
 *   **exp_*/**: Individual implementation folders for each experimental architecture, containing specific model definitions and execution scripts.
 *   **benchmarks/**: Automated output directory for tracking performance metrics (F1 score), training latency, and memory utilization.
 
+## Setup
+
+```bash
+# 1. Clone the repo
+git clone <repo-url>
+cd bigger-bird-experiments
+
+# 2. Create and activate a virtual environment
+python -m venv venv
+source venv/bin/activate        # Linux/macOS
+# venv\Scripts\activate         # Windows
+
+# 3. Install dependencies
+pip install -r requirements.txt
+```
+
 ## Execution Instructions
 
 To execute the experiments, ensure that the environment requirements (PyTorch, Transformers, Accelerate) are met.
