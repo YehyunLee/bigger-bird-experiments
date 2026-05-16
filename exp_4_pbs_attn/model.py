@@ -116,8 +116,6 @@ class PBSAttention(BartAttention):
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
-        if use_cache:
-            return (attn_output, None, (key_states, value_states))
         return (attn_output, None)
 
 def patch_bart(model: nn.Module, block_size: int = 32, num_blocks: int = 4):

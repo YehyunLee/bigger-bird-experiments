@@ -109,8 +109,6 @@ class DeepSeekTopKAttention(BartAttention):
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
         
-        if use_cache:
-            return (attn_output, None, (key_states, value_states))
         return (attn_output, None)
 
 def patch_bart(model: nn.Module, top_k: int = 128, low_rank_dim: int = 16):
@@ -138,10 +136,10 @@ class AttnPool(nn.Module):
         return torch.bmm(a.unsqueeze(1), x).squeeze(1)
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, top_k=128):
+    def __init__(self, base_model, top_k=128, low_rank_dim=16):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, top_k=top_k)
+        patch_bart(self.model, top_k=top_k, low_rank_dim=low_rank_dim)
         hidden_size = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
         self.attn_pool = AttnPool(hidden_size)
 

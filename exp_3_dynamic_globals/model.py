@@ -130,9 +130,6 @@ class DynamicGlobalAttention(BartAttention):
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
-        
-        if use_cache:
-            return (attn_output, None, (key_states, value_states))
         return (attn_output, None)
 
 def patch_bart(model: nn.Module, window_size: int = 64, num_globals: int = 16):

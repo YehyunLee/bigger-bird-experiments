@@ -77,7 +77,9 @@ class LightningHybridAttention(BartAttention):
         K_l = F.elu(K) + 1.0
         
         if attention_mask is not None:
-            K_l = K_l * mask_expanded[:, 0, :].unsqueeze(-1)
+            padding_mask = am_bool.reshape(bsz, -1, src_len)[:, 0, :]  # [B, src_len]
+            padding_mask = padding_mask.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, src_len)
+            K_l = K_l * padding_mask.unsqueeze(-1)
             
         KV = torch.bmm(K_l.transpose(1, 2), V)
         Z = K_l.sum(dim=1, keepdim=True)
@@ -93,9 +95,6 @@ class LightningHybridAttention(BartAttention):
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
-        
-        if use_cache:
-            return (attn_output, None, (key_states, value_states))
         return (attn_output, None)
 
 def patch_bart(model: nn.Module, block_size: int = 64):
