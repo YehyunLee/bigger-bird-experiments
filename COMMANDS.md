@@ -10,6 +10,7 @@ python run_experiment.py --list
 ### SMALL (Quick test / 8GB RAM / ~1GB mem usage)
 ```bash
 # Quick sanity check - runs in ~5 min
+python run_experiment.py --exp 0 --size small   # baseline (full attention)
 python run_experiment.py --exp 1 --size small
 python run_experiment.py --exp 2 --size small
 python run_experiment.py --exp 3 --size small

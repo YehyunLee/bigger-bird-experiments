@@ -66,6 +66,7 @@ COMPUTE_CONFIGS = {
 }
 
 EXPERIMENT_CONFIGS = {
+    0: ("exp_0_baseline", None, {"attention": "full_dense"}),
     1: ("exp_1_deepseek_topk", DeepSeekModel, {"top_k": 64, "low_rank_dim": 16}),
     2: ("exp_2_lightning_hybrid", LightningModel, {"block_size": 128}),
     3: ("exp_3_dynamic_globals", DynamicGlobalsModel, {"window_size": 64, "num_globals": 16}),
@@ -92,8 +93,8 @@ Examples:
         """
     )
     
-    parser.add_argument("--exp", type=int, choices=[1,2,3,4], required=True,
-                       help="Experiment number (1-4)")
+    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4], required=True,
+                       help="Experiment number (0=baseline, 1-4=sparse methods)")
     parser.add_argument("--size", type=str, choices=["small", "medium", "big", "xl"],
                        help="Compute size preset")
     parser.add_argument("--list", action="store_true",
@@ -124,7 +125,8 @@ Examples:
         print("=" * 70)
         print("\nExperiments:")
         for num, (name, _, params) in EXPERIMENT_CONFIGS.items():
-            print(f"  {num}: {name} ({params})")
+            label = " [BASELINE]" if num == 0 else ""
+            print(f"  {num}: {name}{label} ({params})")
         return
     
     if not args.size:
@@ -145,7 +147,7 @@ Examples:
     exp_name, ModelClass, model_params = EXPERIMENT_CONFIGS[args.exp]
     
     print(f"\n{'='*70}")
-    print(f"Running: {exp_name}")
+    print(f"Running: {exp_name}" + (" [BASELINE - full dense attention]" if args.exp == 0 else ""))
     print(f"Compute: {args.size.upper()} - {compute['desc']}")
     print(f"Config: {compute['train_samples']} samples, seq={compute['max_length']}, "
           f"batch={compute['batch_size']}x{compute['grad_accum']}, {compute['epochs']} epochs")
@@ -162,8 +164,11 @@ Examples:
         base_model.gradient_checkpointing_enable()
         print("Gradient checkpointing: ENABLED (saves ~30% memory)\n")
     
-    # Patch model
-    model = ModelClass(base_model, **model_params)
+    # Baseline: use unpatched model directly
+    if ModelClass is None:
+        model = base_model
+    else:
+        model = ModelClass(base_model, **model_params)
     
     # Build dataset
     data_cfg = DataConfig(
