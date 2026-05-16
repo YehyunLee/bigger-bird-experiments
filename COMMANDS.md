@@ -57,6 +57,9 @@ python run_experiment.py --exp 3 --size big --batch 2 --accum 16
 # Longer sequences with gradient checkpointing (saves memory)
 python run_experiment.py --exp 3 --size medium --seq 768 --grad-checkpoint
 
+# Save weights after training so you can re-run eval without retraining
+python run_experiment.py --exp 1 --size big --save-weights
+
 # Custom everything
 python run_experiment.py --exp 3 --size small \
     --train-samples 1000 \
@@ -74,6 +77,28 @@ python run_experiment.py --exp 3 --size small \
 | 2 Lightning | `python run_experiment.py --exp 2 --size small` | `--exp 2 --size medium` | `--exp 2 --size big` | `--exp 2 --size xl` |
 | 3 Dynamic Globals | `python run_experiment.py --exp 3 --size small` | `--exp 3 --size medium` | `--exp 3 --size big` | `--exp 3 --size xl` |
 | 4 PBS | `python run_experiment.py --exp 4 --size small` | `--exp 4 --size medium` | `--exp 4 --size big` | `--exp 4 --size xl` |
+
+## Saving & Reloading Weights
+
+Pass `--save-weights` to persist the model after training:
+```bash
+python run_experiment.py --exp 1 --size big --save-weights
+```
+Weights are saved to `benchmarks/<exp_name>/weights_<timestamp>/` and the path is recorded in the matching `eval_<timestamp>.json` under `experiment_metadata.weights_path`.
+
+To reload for eval-only later:
+```python
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+weights_dir = "benchmarks/exp_1_deepseek_topk/weights_20260516_165432"
+model = AutoModelForSequenceClassification.from_pretrained(weights_dir)
+tokenizer = AutoTokenizer.from_pretrained(weights_dir)
+# Re-apply patches if needed (exp_1-4 only):
+# from exp_1_deepseek_topk.model import patch_bart; patch_bart(model)
+```
+
+> **Note:** For patched experiments (exp 1–4) the *base* BART weights are saved (patches are
+> re-applied at load time). For the baseline (exp 0) the full model is saved as-is.
 
 ## Visualize Results
 

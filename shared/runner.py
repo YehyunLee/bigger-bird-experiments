@@ -58,7 +58,7 @@ class TrajectoryCallback(TrainerCallback):
             }
             self.trajectory.append(point)
 
-def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_meta: dict = None, callbacks=None):
+def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_meta: dict = None, callbacks=None, save_weights: bool = False):
     fp16, bf16, torch_compile, use_mps = device_flags()
     eval_accum = 1 if use_mps else 8
     
@@ -149,6 +149,21 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         }
     }
     
+    # Optionally save model weights
+    weights_path = None
+    if save_weights:
+        weights_dir = os.path.join(out_dir, f"weights_{timestamp}")
+        os.makedirs(weights_dir, exist_ok=True)
+        # Unwrap PatchedModel wrapper to get the underlying HF model if possible
+        save_model = getattr(model, "model", model)
+        save_model.save_pretrained(weights_dir)
+        tokenizer.save_pretrained(weights_dir)
+        weights_path = weights_dir
+        print(f"[{exp_name}] Weights saved to {weights_dir}")
+    
+    if weights_path:
+        results["experiment_metadata"]["weights_path"] = weights_path
+
     # Save as timestamped JSON for scaling law analysis
     json_path = os.path.join(out_dir, f"eval_{timestamp}.json")
     with open(json_path, "w") as f:

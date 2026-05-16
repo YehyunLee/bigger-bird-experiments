@@ -110,6 +110,8 @@ Examples:
     parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
     parser.add_argument("--grad-checkpoint", action="store_true",
                        help="Enable gradient checkpointing (saves memory)")
+    parser.add_argument("--save-weights", action="store_true",
+                       help="Save model weights to benchmarks/<exp>/weights_<timestamp>/ for later eval")
     
     args = parser.parse_args()
     
@@ -199,7 +201,8 @@ Examples:
             "compute_preset": args.size,
             "train_samples": compute["train_samples"],
             "seq_length": compute["max_length"]
-        }
+        },
+        save_weights=args.save_weights,
     )
 
 if __name__ == "__main__":
