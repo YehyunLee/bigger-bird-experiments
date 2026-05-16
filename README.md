@@ -19,6 +19,8 @@ The repository contains four distinct experimental approaches to sparse attentio
 
 ### Base Model: BART-base (Standard Transformer)
 
+> **Analogy:** Imagine you're in a room of 768 people and every single person has to shake hands with every other person before anyone can speak. That's standard attention — thorough, but exhausting and slow. As the room gets bigger, the number of handshakes explodes quadratically.
+
 ```
 Input Tokens (N=768)
        │
@@ -58,6 +60,8 @@ Input Tokens (N=768)
 
 **Key Innovation**: Low-rank projection to approximate token importance before full attention.
 
+> **Analogy:** Before reading a book carefully, you skim the chapter titles and first sentences to figure out which chapters are actually relevant to your question. This experiment does the same — it runs a fast, blurry scan of all tokens to find the top K most promising ones, then reads only those in full detail. The "blurry scan" is cheap because it uses a compressed (low-rank) version of the token representations.
+
 ```
 Input ──► Q, K, V projections
               │
@@ -93,6 +97,8 @@ Input ──► Q, K, V projections
 ### Experiment 2: Lightning Hybrid Attention
 
 **Key Innovation**: Dual-path — local precision (softmax) + global efficiency (linear).
+
+> **Analogy:** Think of how you read a newspaper. You read each article closely word-by-word (local precision), but you also glance at the full front page to get the big picture (global context). This experiment does both at the same time — sharp softmax attention for nearby tokens, and a cheap running-sum trick for distant context — then blends the two outputs together.
 
 ```
 Input ──► Q, K, V
@@ -131,6 +137,8 @@ Input ──► Q, K, V
 ### Experiment 3: Content-Aware Dynamic Globals
 
 **Key Innovation**: Learned gating network selects dynamic global tokens + sliding window.
+
+> **Analogy:** In a meeting, some people are topic experts who everyone needs to hear from — their words are "globally" important regardless of where they sit. This experiment trains a small neural network to identify which tokens in a sentence are those "VIP speakers", then makes everyone pay attention to those VIPs plus their immediate neighbours. The VIPs change dynamically per sentence — unlike Big Bird which hardcodes fixed positions as global.
 
 ```
 Input ──► hidden_states
@@ -181,6 +189,8 @@ Input ──► hidden_states
 ### Experiment 4: Permuted Block-Sparse Attention (PBS)
 
 **Key Innovation**: Block-level selection for GPU memory coalescing.
+
+> **Analogy:** Instead of searching a library book-by-book, you first scan the shelf labels to find the most relevant shelves, then pull every book off those shelves. This is both faster to search (fewer comparisons at the shelf level) and physically efficient — grabbing a whole shelf at once is much faster than random scattered picks. On a GPU, reading memory in contiguous chunks like this dramatically speeds up computation compared to jumping around randomly.
 
 ```
 Input ──► Q, K, V [shape: BH, T, d]
