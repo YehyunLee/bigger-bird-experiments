@@ -1,0 +1,43 @@
+SCALING LAW ANALYSIS
+============================================================
+
+
+exp_0_baseline:
+----------------------------------------
+  Samples=  200, Epochs=1, F1=0.615, Time=5.6s
+  Samples=  500, Epochs=2, F1=0.884, Time=669.1s
+  Samples= 2000, Epochs=3, F1=0.905, Time=136.4s
+  Samples= 6000, Epochs=3, F1=0.931, Time=216.7s
+  -> Scaling: 30.0x data → F1 Δ=+0.315
+
+exp_1_deepseek_topk:
+----------------------------------------
+  Samples=  200, Epochs=1, F1=0.677, Time=223.7s
+  Samples=  500, Epochs=2, F1=0.839, Time=58.3s
+  Samples= 2000, Epochs=3, F1=0.918, Time=208.8s
+  Samples= 6000, Epochs=3, F1=0.926, Time=609.8s
+  -> Scaling: 30.0x data → F1 Δ=+0.249
+
+exp_2_lightning_hybrid:
+----------------------------------------
+  Samples=  200, Epochs=1, F1=0.553, Time=6.6s
+  Samples=  500, Epochs=2, F1=0.629, Time=63.3s
+  Samples= 2000, Epochs=3, F1=0.865, Time=170.8s
+  Samples= 6000, Epochs=3, F1=0.908, Time=267.5s
+  -> Scaling: 30.0x data → F1 Δ=+0.355
+
+exp_3_dynamic_globals:
+----------------------------------------
+  Samples=  200, Epochs=1, F1=0.541, Time=278.2s
+  Samples=  500, Epochs=2, F1=0.764, Time=1334.8s
+  Samples= 2000, Epochs=3, F1=0.876, Time=234.4s
+  Samples= 6000, Epochs=3, F1=0.905, Time=669.9s
+  -> Scaling: 30.0x data → F1 Δ=+0.364
+
+exp_4_pbs_attn:
+----------------------------------------
+  Samples=  200, Epochs=1, F1=0.550, Time=317.2s
+  Samples=  500, Epochs=2, F1=0.674, Time=66.3s
+  Samples= 2000, Epochs=3, F1=0.902, Time=269.1s
+  Samples= 6000, Epochs=3, F1=0.902, Time=843.2s
+  -> Scaling: 30.0x data → F1 Δ=+0.352
