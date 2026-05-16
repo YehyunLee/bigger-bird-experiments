@@ -37,8 +37,8 @@ def device_flags():
     bf16 = False
     torch_compile = False
     if use_cuda:
-        fp16 = True
         bf16 = torch.cuda.is_bf16_supported()
+        fp16 = not bf16
     return fp16, bf16, torch_compile, use_mps
 
 class TrajectoryCallback(TrainerCallback):
@@ -102,7 +102,7 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         args=args,
         train_dataset=ds["train"],
         eval_dataset=ds["validation"],
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=collator,
         compute_metrics=compute_metrics,
         preprocess_logits_for_metrics=preprocess_logits_for_metrics,
