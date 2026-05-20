@@ -203,7 +203,24 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
 
     print(f"[{exp_name}] Evaluating...", flush=True)
     eval_res = trainer.evaluate()
-    
+
+    # Inference latency
+    device = next(model.parameters()).device
+    seq_len = ds["train"][0]["input_ids"].shape[0] if "input_ids" in ds["train"][0] else 256
+    try:
+        inf_latency_ms = _measure_inference_latency(model, tokenizer, device, seq_len=seq_len, n_trials=10)
+        print(f"[{exp_name}] Inference latency: {inf_latency_ms:.2f} ms/seq")
+    except Exception as e:
+        inf_latency_ms = None
+        print(f"[{exp_name}] Inference latency measurement failed: {e}")
+
+    # Softmax comparison count
+    softmax_comparisons = _compute_softmax_comparisons(seq_len, model, extra_meta)
+    if softmax_comparisons:
+        baseline_comparisons = seq_len * seq_len * 12 * 12  # n² × heads × layers
+        reduction_pct = (1 - softmax_comparisons / baseline_comparisons) * 100
+        print(f"[{exp_name}] Softmax comparisons: {softmax_comparisons:,} ({reduction_pct:.1f}% vs baseline)")
+
     # 📝 Prepare Rich Metadata and Structured Results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     results = {
@@ -220,16 +237,20 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
             "dataset_info": {
                 "train_size": len(ds["train"]),
                 "eval_size": len(ds["validation"]),
-                "max_seq_len": ds["train"][0]["input_ids"].shape[0] if "input_ids" in ds["train"][0] else "unknown"
+                "max_seq_len": seq_len
             },
             "environment": {
                 "use_mps": use_mps,
-                "fp16": fp16
+                "fp16": fp16,
+                "peak_memory_mb": peak_mem_mb
             },
             "model_config": extra_meta or {}
         },
         "performance_metrics": {
             "training_time_seconds": train_time,
+            "peak_memory_mb": peak_mem_mb,
+            "inference_latency_ms": inf_latency_ms,
+            "softmax_comparisons": softmax_comparisons,
             "train": train_res.metrics,
             "eval": eval_res,
             "trajectory": traj_callback.trajectory

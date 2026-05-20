@@ -291,10 +291,42 @@ python exp_4_pbs_attn/run.py
 
 The current micro-benchmark configuration is set to train on 200 samples with a sequence length of 256 for rapid iteration and validation of the routing logic.
 
+## Efficiency & Complexity Benchmarks
+
+Beyond accuracy, every training run now automatically captures:
+- **Peak memory** (MB)
+- **Inference latency** (ms/sequence)
+- **Softmax comparison count** (vs full dense baseline)
+
+### Long-Context Scaling Test
+Test how each method handles longer sequences with the **same compute budget**:
+```bash
+python benchmarks/efficiency_eval.py --exp 0,1,2,3,4 --seq 256,512,1024,2048
+```
+This fixes samples=500, epochs=2 and varies sequence length. Results are saved to `benchmarks/efficiency_results.json`.
+
+Visualize with:
+```bash
+python viz/efficiency_viz.py
+```
+
+### Empirical Complexity Verification
+Micro-benchmark the attention forward pass to verify O(n) vs O(n²):
+```bash
+python benchmarks/complexity_verify.py --exp 0,1,2,3,4 --seq 128,256,512,1024,2048
+```
+Output includes log-log slope per experiment (slope ≈ 1 means O(n), ≈ 2 means O(n²)).
+
+### Compare Experiments
+After running experiments, compare across all metrics:
+```bash
+python viz/compare_experiments.py
+```
+
 ## Technical Stack
 
 *   **Frameworks**: Python, PyTorch, Hugging Face Transformers, Accelerate.
-*   **Evaluation Metrics**: F1 score (primary), training throughput (steps/sec), and memory footprint.
+*   **Evaluation Metrics**: F1 score (primary), training throughput (steps/sec), memory footprint, inference latency, and softmax comparison reduction.
 *   **Baseline**: Experiments are currently validated against the facebook/bart-base architecture as a comparative patch.
 
 ## Team
