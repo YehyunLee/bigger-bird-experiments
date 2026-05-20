@@ -29,7 +29,10 @@ class ExperimentResult:
     epochs: int
     train_loss: float
     eval_loss: float
-    raw: Dict[str, Any]
+    peak_memory_mb: float = 0.0
+    inference_latency_ms: float = None
+    softmax_comparisons: int = None
+    raw: Dict[str, Any] = None
 
 def load_all_results() -> List[ExperimentResult]:
     """Load all experiment results from benchmark JSON files."""
@@ -60,6 +63,9 @@ def load_all_results() -> List[ExperimentResult]:
                     epochs=meta["training_config"]["epochs"],
                     train_loss=perf["train"].get("train_loss", 0),
                     eval_loss=perf["eval"].get("eval_loss", 0),
+                    peak_memory_mb=perf.get("peak_memory_mb", 0) or meta.get("environment", {}).get("peak_memory_mb", 0),
+                    inference_latency_ms=perf.get("inference_latency_ms"),
+                    softmax_comparisons=perf.get("softmax_comparisons"),
                     raw=data
                 ))
             except Exception as e:
@@ -89,11 +95,12 @@ def print_comparison_table(groups: Dict[int, Dict[str, ExperimentResult]]):
         print("\n" + "="*100)
         print(f"COMPARISON — {n_samples} training samples (latest run per experiment)")
         print("="*100)
-        header = f"{'Experiment':<25} {'F1':>8} {'Acc':>7} {'Train(s)':>10} {'Eval(s)':>8} {'Train Loss':>10} {'Eval Loss':>10}"
+        header = f"{'Experiment':<25} {'F1':>8} {'Acc':>7} {'Train(s)':>10} {'Peak(MB)':>10} {'Lat(ms)':>10}"
         print(header)
         print("-"*100)
         for name, r in sorted(exps.items()):
-            print(f"{name:<25} {r.f1:>8.3f} {r.accuracy:>7.3f} {r.train_time:>10.1f} {r.eval_time:>8.1f} {r.train_loss:>10.3f} {r.eval_loss:>10.3f}")
+            lat = f"{r.inference_latency_ms:.1f}" if r.inference_latency_ms is not None else "N/A"
+            print(f"{name:<25} {r.f1:>8.3f} {r.accuracy:>7.3f} {r.train_time:>10.1f} {r.peak_memory_mb:>10.0f} {lat:>10}")
         print("="*100)
         best_f1 = max(exps.values(), key=lambda x: x.f1)
         fastest = min(exps.values(), key=lambda x: x.train_time)
@@ -116,22 +123,46 @@ def plot_comparison(groups: Dict[int, Dict[str, ExperimentResult]], out_dir: str
 
         short_names = [e.replace("exp_", "").replace("_", "\n") for e in exp_names]
 
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        mems  = [exps[e].peak_memory_mb for e in exp_names]
+        lats  = [exps[e].inference_latency_ms or 0 for e in exp_names]
+
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
         fig.suptitle(f"Experiment Comparison — {n_samples} training samples", fontsize=13, fontweight='bold')
 
-        axes[0].bar(short_names, f1s, color='steelblue')
-        axes[0].set_ylabel('F1 Score')
-        axes[0].set_title('F1 Score')
-        axes[0].set_ylim(0, 1)
+        axes[0, 0].bar(short_names, f1s, color='steelblue')
+        axes[0, 0].set_ylabel('F1 Score')
+        axes[0, 0].set_title('F1 Score')
+        axes[0, 0].set_ylim(0, 1)
 
-        axes[1].bar(short_names, accs, color='forestgreen')
-        axes[1].set_ylabel('Accuracy')
-        axes[1].set_title('Accuracy')
-        axes[1].set_ylim(0, 1)
+        axes[0, 1].bar(short_names, accs, color='forestgreen')
+        axes[0, 1].set_ylabel('Accuracy')
+        axes[0, 1].set_title('Accuracy')
+        axes[0, 1].set_ylim(0, 1)
 
-        axes[2].bar(short_names, times, color='coral')
-        axes[2].set_ylabel('Training Time (s)')
-        axes[2].set_title('Training Time')
+        axes[0, 2].bar(short_names, times, color='coral')
+        axes[0, 2].set_ylabel('Training Time (s)')
+        axes[0, 2].set_title('Training Time')
+
+        axes[1, 0].bar(short_names, mems, color='mediumpurple')
+        axes[1, 0].set_ylabel('Peak Memory (MB)')
+        axes[1, 0].set_title('Peak Memory')
+
+        axes[1, 1].bar(short_names, lats, color='goldenrod')
+        axes[1, 1].set_ylabel('Inference Latency (ms)')
+        axes[1, 1].set_title('Inference Latency')
+
+        # Softmax comparison reduction
+        comps = [exps[e].softmax_comparisons for e in exp_names]
+        baseline_comp = max(comps) if comps and max(c for c in comps if c is not None) else 1
+        reductions = []
+        for c in comps:
+            if c is not None and baseline_comp and baseline_comp != c:
+                reductions.append((1 - c / baseline_comp) * 100)
+            else:
+                reductions.append(0)
+        axes[1, 2].bar(short_names, reductions, color='teal')
+        axes[1, 2].set_ylabel('Reduction vs Baseline (%)')
+        axes[1, 2].set_title('Softmax Comparison Reduction')
 
         plt.tight_layout()
         path = os.path.join(out_dir, f"comparison_{n_samples}samples.png")
@@ -149,10 +180,12 @@ def export_csv(results: List[ExperimentResult], csv_path: str):
     with open(csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(['Experiment', 'Timestamp', 'Train_Samples', 'F1', 'Accuracy',
-                         'Train_Time_s', 'Eval_Time_s', 'Epochs', 'Train_Loss', 'Eval_Loss'])
+                         'Train_Time_s', 'Eval_Time_s', 'Epochs', 'Train_Loss', 'Eval_Loss',
+                         'Peak_Memory_MB', 'Inference_Latency_ms', 'Softmax_Comparisons'])
         for r in results:
             writer.writerow([r.name, r.timestamp, r.train_samples, r.f1, r.accuracy,
-                             r.train_time, r.eval_time, r.epochs, r.train_loss, r.eval_loss])
+                             r.train_time, r.eval_time, r.epochs, r.train_loss, r.eval_loss,
+                             r.peak_memory_mb, r.inference_latency_ms, r.softmax_comparisons])
     print(f"CSV exported: {csv_path}")
 
 
