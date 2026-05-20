@@ -193,11 +193,14 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         callbacks=all_callbacks
     )
 
+    _reset_peak_memory()
     print(f"[{exp_name}] Starting training...", flush=True)
     start_time = time.time()
     train_res = trainer.train()
     train_time = time.time() - start_time
-    
+    peak_mem_mb = _peak_memory_mb()
+    print(f"[{exp_name}] Peak memory: {peak_mem_mb:.1f} MB")
+
     print(f"[{exp_name}] Evaluating...", flush=True)
     eval_res = trainer.evaluate()
     
