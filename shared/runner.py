@@ -1,12 +1,96 @@
 import torch
 import os
 import time
+import psutil
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score, f1_score
 from transformers import Trainer, TrainingArguments, DataCollatorWithPadding, TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 import json
 from datetime import datetime
+
+
+def _reset_peak_memory():
+    """Reset peak memory counters for the active accelerator."""
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+
+
+def _peak_memory_mb():
+    """Return peak allocated memory in MB."""
+    if torch.cuda.is_available():
+        return torch.cuda.max_memory_allocated() / (1024 ** 2)
+    else:
+        # Fallback: RSS of current process
+        proc = psutil.Process(os.getpid())
+        return proc.memory_info().rss / (1024 ** 2)
+
+
+def _compute_softmax_comparisons(seq_len, model, extra_meta):
+    """Estimate total softmax comparisons across all layers/heads."""
+    # BART-base: 12 layers, 12 heads
+    n_layers = 12
+    n_heads = 12
+    base = seq_len * n_layers * n_heads
+    meta = extra_meta or {}
+
+    if meta.get("attention") == "full_dense" or model is None:
+        # Baseline: every query attends to all n keys
+        return base * seq_len
+
+    # Heuristic based on which experiment params are present
+    if "top_k" in meta:
+        # Exp 1: top_k keys per query
+        return base * meta["top_k"]
+    elif "block_size" in meta and "num_blocks" in meta:
+        # Exp 4: num_blocks * block_size per query
+        return base * meta["num_blocks"] * meta["block_size"]
+    elif "window_size" in meta and "num_globals" in meta:
+        # Exp 3: globals + window per query
+        return base * (meta["num_globals"] + meta["window_size"])
+    elif "block_size" in meta:
+        # Exp 2: Lightning Hybrid — local window only (block_size)
+        return base * meta["block_size"]
+    return None
+
+
+def _measure_inference_latency(model, tokenizer, device, seq_len=256, n_trials=10):
+    """Measure average forward-pass latency (ms) on synthetic batch."""
+    model.eval()
+    dummy = tokenizer(
+        "This is a test sentence for latency benchmarking. " * 50,
+        return_tensors="pt",
+        max_length=seq_len,
+        truncation=True,
+        padding="max_length",
+    )
+    dummy = {k: v.to(device) for k, v in dummy.items()}
+
+    # Warm-up
+    with torch.no_grad():
+        for _ in range(3):
+            _ = model(**dummy)
+
+    # Timed runs
+    if torch.cuda.is_available():
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        with torch.no_grad():
+            for _ in range(n_trials):
+                _ = model(**dummy)
+        end.record()
+        torch.cuda.synchronize()
+        total_ms = start.elapsed_time(end)
+    else:
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(n_trials):
+                _ = model(**dummy)
+        total_ms = (time.perf_counter() - t0) * 1000
+
+    return total_ms / n_trials
 
 @dataclass
 class TrainConfig:
