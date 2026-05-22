@@ -153,7 +153,8 @@ def plot_comparison(groups: Dict[int, Dict[str, ExperimentResult]], out_dir: str
 
         # Softmax comparison reduction
         comps = [exps[e].softmax_comparisons for e in exp_names]
-        baseline_comp = max(comps) if comps and max(c for c in comps if c is not None) else 1
+        valid_comps = [c for c in comps if c is not None]
+        baseline_comp = max(valid_comps) if valid_comps else 1
         reductions = []
         for c in comps:
             if c is not None and baseline_comp and baseline_comp != c:
