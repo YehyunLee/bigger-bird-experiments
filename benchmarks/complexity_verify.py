@@ -183,6 +183,7 @@ def main():
     print("\nEMPIRICAL COMPLEXITY (log-log slope ≈ 1 means O(n), ≈ 2 means O(n²))")
     print("-" * 60)
     from math import log
+    slope_map = {}
     for exp_num in exp_nums:
         exp_name = f"exp_{exp_num}_baseline" if exp_num == 0 else f"exp_{exp_num}"
         pts = [(r["seq_length"], r["time_ms"]) for r in results
@@ -196,9 +197,55 @@ def main():
                 slope = log(t2 / t1) / log(s2 / s1)
                 slopes.append(slope)
             avg_slope = sum(slopes) / len(slopes)
+            slope_map[exp_name] = avg_slope
             print(f"  {exp_name:<20} avg slope = {avg_slope:.3f}")
         else:
             print(f"  {exp_name:<20} insufficient data")
+
+    # Generate log-log plot
+    try:
+        import matplotlib.pyplot as plt
+        import numpy as np
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        colors = plt.cm.tab10.colors
+
+        for i, exp_num in enumerate(exp_nums):
+            exp_name = f"exp_{exp_num}_baseline" if exp_num == 0 else f"exp_{exp_num}"
+            pts = [(r["seq_length"], r["time_ms"]) for r in results
+                   if r["exp_num"] == exp_num and r["time_ms"] is not None and not r.get("oom", False)]
+            pts = sorted(set(pts))
+            if len(pts) < 2:
+                continue
+            xs = np.array([p[0] for p in pts])
+            ys = np.array([p[1] for p in pts])
+            slope_label = slope_map.get(exp_name, 0)
+            label = f"{exp_name.replace('_', ' ')} (slope={slope_label:.2f})"
+            ax.loglog(xs, ys, marker='o', label=label, color=colors[i % len(colors)], linewidth=2)
+
+        # Reference lines
+        if len(seq_lengths) >= 2:
+            x_ref = np.array([min(seq_lengths), max(seq_lengths)])
+            # O(n) reference
+            ax.loglog(x_ref, x_ref * (1 / x_ref[0]), '--', color='gray', alpha=0.5, label='O(n) reference')
+            # O(n²) reference
+            ax.loglog(x_ref, (x_ref ** 2) / (x_ref[0] ** 2), '--', color='black', alpha=0.5, label='O(n²) reference')
+
+        ax.set_xlabel("Sequence Length (tokens)", fontsize=12)
+        ax.set_ylabel("Time per Forward Pass (ms)", fontsize=12)
+        ax.set_title("Empirical Time Complexity (Log-Log Plot)\nslope ≈ 1 → O(n),  slope ≈ 2 → O(n²)", fontsize=14, fontweight='bold')
+        ax.legend(fontsize=9)
+        ax.grid(True, which="both", ls="-", alpha=0.2)
+
+        plot_path = os.path.join(os.path.dirname(__file__), "complexity_plot.png")
+        plt.tight_layout()
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"\nSaved complexity plot to: {plot_path}")
+    except ImportError:
+        print("\nInstall matplotlib to generate the complexity plot: pip install matplotlib")
+    except Exception as e:
+        print(f"\nPlot generation failed: {e}")
 
 
 if __name__ == "__main__":
