@@ -27,6 +27,13 @@ from exp_1_deepseek_topk.model import DeepSeekTopKAttention
 from exp_2_lightning_hybrid.model import LightningHybridAttention
 from exp_3_dynamic_globals.model import DynamicGlobalAttention
 from exp_4_pbs_attn.model import PBSAttention
+from exp_5_bigger_bird.model import BiggerBirdAttention
+from exp_6_deepseek_pbs.model import DeepSeekPBSAttention
+from exp_7_layer_adaptive.model import LayerAdaptiveAttention
+from exp_9_attn_specul.model import AttnSpeculAttention
+from exp_10_gqa_sparse.model import GQASparseAttention
+# Note: exp_8 (token_drop) doesn't have a standalone attention class — it modifies
+# the encoder loop, so it's excluded from the per-layer micro-benchmark.
 
 
 class DummyBartAttention(BartAttention):
@@ -94,6 +101,23 @@ def create_module(exp_num, device):
         return DynamicGlobalAttention(base, window_size=64, num_globals=16)
     elif exp_num == 4:
         return PBSAttention(base, block_size=64, num_blocks=2)
+    elif exp_num == 5:
+        return BiggerBirdAttention(base, window_size=64, local_k=32,
+                                   num_globals=16, num_teleports=8,
+                                   diversity_lambda=0.3, teleport_bias=0.5)
+    elif exp_num == 6:
+        return DeepSeekPBSAttention(base, top_k=64, low_rank_dim=16,
+                                    block_size=32, num_blocks=4)
+    elif exp_num == 7:
+        return LayerAdaptiveAttention(base, top_k=64, low_rank_dim=16, layer_idx=6)
+    elif exp_num == 8:
+        # Token drop is encoder-level — skip micro-benchmark
+        return base
+    elif exp_num == 9:
+        return AttnSpeculAttention(base, window_size=64, num_anchors=4,
+                                   verify=False, verify_kl_weight=0.0)
+    elif exp_num == 10:
+        return GQASparseAttention(base, kv_groups=4, top_k=64, low_rank_dim=16)
     else:
         raise ValueError(f"Unknown exp_num: {exp_num}")
 
@@ -242,6 +266,75 @@ def main():
         plt.savefig(plot_path, dpi=150, bbox_inches='tight')
         plt.close()
         print(f"\nSaved complexity plot to: {plot_path}")
+
+        # ---- THEORETICAL SOFTMAX COMPARISONS PLOT (the metric that actually matters) ----
+        fig2, (ax2a, ax2b) = plt.subplots(1, 2, figsize=(14, 5))
+
+        # Config params per experiment
+        cfg_map = {
+            0: ("baseline", None, "n"),
+            1: ("deepseek_topk", 64, "k"),
+            2: ("lightning_hybrid", 128, "block_size"),
+            3: ("dynamic_globals", 80, "window+globals"),
+            4: ("pbs_attn", 128, "blocks*bsize"),
+            5: ("bigger_bird", 56, "k+g+t"),   # 32+16+8
+            6: ("deepseek_pbs", 64, "topk_in_blocks"),
+            7: ("layer_adaptive", 96, "avg_k"), # (192+64+32)/3 ≈ 96
+            9: ("attn_specul", 68, "window+anchors"),  # 64+4
+            10: ("gqa_sparse", 64, "topk"),
+        }
+
+        n_layers = 12
+        n_heads = 12
+        baseline = None
+
+        for i, exp_num in enumerate(exp_nums):
+            if exp_num not in cfg_map:
+                continue
+            name, k, label = cfg_map[exp_num]
+            xs_th = np.array(seq_lengths)
+            # Total softmax key positions evaluated across all layers/heads/batch
+            # Baseline: n_layers * n_heads * batch * seq_len * seq_len
+            # Sparse:   n_layers * n_heads * batch * seq_len * k
+            if k is None:
+                ys_th = n_layers * n_heads * args.batch * xs_th * xs_th
+                baseline = ys_th
+            else:
+                ys_th = n_layers * n_heads * args.batch * xs_th * k
+
+            ax2a.plot(xs_th, ys_th / 1e6, marker='o', label=f"{name} ({label}={k or 'n'})",
+                     color=colors[i % len(colors)], linewidth=2)
+
+        ax2a.set_xlabel("Sequence Length (tokens)", fontsize=12)
+        ax2a.set_ylabel("Total Softmax Comparisons (millions)", fontsize=12)
+        ax2a.set_title("Theoretical Softmax Comparisons\nper Forward Pass", fontsize=13, fontweight='bold')
+        ax2a.legend(fontsize=8)
+        ax2a.grid(True, alpha=0.2)
+
+        # Normalized reduction vs baseline
+        if baseline is not None:
+            for i, exp_num in enumerate(exp_nums):
+                if exp_num == 0 or exp_num not in cfg_map:
+                    continue
+                name, k, label = cfg_map[exp_num]
+                xs_th = np.array(seq_lengths)
+                ys_th = n_layers * n_heads * args.batch * xs_th * k
+                reduction = (1 - ys_th / baseline) * 100
+                ax2b.plot(xs_th, reduction, marker='o', label=f"{name}",
+                         color=colors[i % len(colors)], linewidth=2)
+
+        ax2b.set_xlabel("Sequence Length (tokens)", fontsize=12)
+        ax2b.set_ylabel("Reduction vs Baseline (%)", fontsize=12)
+        ax2b.set_title("Theoretical % Reduction\nin Softmax Comparisons", fontsize=13, fontweight='bold')
+        ax2b.legend(fontsize=8)
+        ax2b.grid(True, alpha=0.2)
+        ax2b.set_ylim(0, 100)
+
+        plot_path2 = os.path.join(os.path.dirname(__file__), "complexity_theoretical.png")
+        plt.tight_layout()
+        plt.savefig(plot_path2, dpi=150, bbox_inches='tight')
+        plt.close()
+        print(f"Saved theoretical plot to: {plot_path2}")
     except ImportError:
         print("\nInstall matplotlib to generate the complexity plot: pip install matplotlib")
     except Exception as e:
