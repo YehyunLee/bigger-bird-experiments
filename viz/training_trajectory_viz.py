@@ -72,7 +72,8 @@ def plot_training_trajectories(runs: List[TrainingRun], save_dir: str):
         'exp_1_deepseek_topk': '#1f77b4',
         'exp_2_lightning_hybrid': '#ff7f0e',
         'exp_3_dynamic_globals': '#2ca02c',
-        'exp_4_pbs_attn': '#d62728'
+        'exp_4_pbs_attn': '#d62728',
+        'exp_5_nsa': '#9467bd',
     }
     
     # Group by experiment

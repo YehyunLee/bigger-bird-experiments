@@ -15,6 +15,7 @@ python run_experiment.py --exp 1 --size small
 python run_experiment.py --exp 2 --size small
 python run_experiment.py --exp 3 --size small
 python run_experiment.py --exp 4 --size small
+python run_experiment.py --exp 5 --size small  
 ```
 **Config:** 500 samples, seq=256, batch=1, 2 epochs
 
@@ -25,6 +26,7 @@ python run_experiment.py --exp 1 --size medium
 python run_experiment.py --exp 2 --size medium
 python run_experiment.py --exp 3 --size medium
 python run_experiment.py --exp 4 --size medium
+python run_experiment.py --exp 5 --size medium 
 ```
 **Config:** 2000 samples, seq=512, batch=2, accum=4, 3 epochs
 
@@ -35,6 +37,7 @@ python run_experiment.py --exp 1 --size big
 python run_experiment.py --exp 2 --size big
 python run_experiment.py --exp 3 --size big
 python run_experiment.py --exp 4 --size big
+python run_experiment.py --exp 5 --size big 
 ```
 **Config:** 6000 samples, seq=768, batch=4, accum=8, 3 epochs
 
@@ -77,6 +80,8 @@ python run_experiment.py --exp 3 --size small \
 | 2 Lightning | `python run_experiment.py --exp 2 --size small` | `--exp 2 --size medium` | `--exp 2 --size big` | `--exp 2 --size xl` |
 | 3 Dynamic Globals | `python run_experiment.py --exp 3 --size small` | `--exp 3 --size medium` | `--exp 3 --size big` | `--exp 3 --size xl` |
 | 4 PBS | `python run_experiment.py --exp 4 --size small` | `--exp 4 --size medium` | `--exp 4 --size big` | `--exp 4 --size xl` |
+| 5 NSA | `python run_experiment.py --exp 5 --size small` | `--exp 5 --size medium` | `--exp 5 --size big` | `--exp 5 --size xl` |
+
 
 ## Saving & Reloading Weights
 
@@ -95,10 +100,13 @@ model = AutoModelForSequenceClassification.from_pretrained(weights_dir)
 tokenizer = AutoTokenizer.from_pretrained(weights_dir)
 # Re-apply patches if needed (exp_1-4 only):
 # from exp_1_deepseek_topk.model import patch_bart; patch_bart(model)
+# For exp 5: from exp_5_nsa.model import PatchedModel  # wrap base_model with NSA patches
 ```
 
 > **Note:** For patched experiments (exp 1–4) the *base* BART weights are saved (patches are
 > re-applied at load time). For the baseline (exp 0) the full model is saved as-is.
+>
+> **Exp 5:** Same as other patches — use `PatchedModel` or `patch_bart` from `exp_5_nsa.model` after loading weights.
 
 ## Visualize Results
 

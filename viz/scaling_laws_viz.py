@@ -90,7 +90,8 @@ def plot_scaling_trajectories(grouped_runs: Dict[str, List[ScalingRun]], save_di
         'exp_1_deepseek_topk': '#1f77b4',
         'exp_2_lightning_hybrid': '#ff7f0e', 
         'exp_3_dynamic_globals': '#2ca02c',
-        'exp_4_pbs_attn': '#d62728'
+        'exp_4_pbs_attn': '#d62728',
+        'exp_5_nsa': '#9467bd',
     }
     
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))

@@ -6,6 +6,7 @@ Usage:
   python run_experiment.py --exp 3 --size medium   # Good GPU (8GB mem)  
   python run_experiment.py --exp 3 --size big      # Big GPU (24GB+ mem)
   python run_experiment.py --exp 3 --size big --epochs 5 --batch 4
+  python run_experiment.py --exp 5 --size big    
 """
 
 import sys
@@ -24,6 +25,7 @@ from exp_1_deepseek_topk.model import PatchedModel as DeepSeekModel
 from exp_2_lightning_hybrid.model import PatchedModel as LightningModel
 from exp_3_dynamic_globals.model import PatchedModel as DynamicGlobalsModel
 from exp_4_pbs_attn.model import PatchedModel as PBSModel
+from exp_5_nsa.model import PatchedModel as NSAModel
 
 # Compute presets
 COMPUTE_CONFIGS = {
@@ -71,6 +73,7 @@ EXPERIMENT_CONFIGS = {
     2: ("exp_2_lightning_hybrid", LightningModel, {"block_size": 128}),
     3: ("exp_3_dynamic_globals", DynamicGlobalsModel, {"window_size": 64, "num_globals": 16}),
     4: ("exp_4_pbs_attn", PBSModel, {"block_size": 64, "num_blocks": 2}),
+    5: ("exp_5_nsa", NSAModel, {"block_size": 32, "stride": 32, "topk_blocks": 4, "window_size": 128, "use_triton": True}),
 }
 
 def main():
@@ -93,8 +96,8 @@ Examples:
         """
     )
     
-    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4], required=True,
-                       help="Experiment number (0=baseline, 1-4=sparse methods)")
+    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5], required=True,
+                       help="Experiment number (0=baseline, 1-5=sparse methods)")
     parser.add_argument("--size", type=str, choices=["small", "medium", "big", "xl"],
                        help="Compute size preset")
     parser.add_argument("--list", action="store_true",
