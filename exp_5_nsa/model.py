@@ -142,7 +142,7 @@ class NSAAttention(BartAttention):
         if self._use_triton_kernels(q):
             try:
                 key_mask = build_key_mask(attention_mask, bsz, self.num_heads, src_len, q.device)
-                return sliding_window_attention(q, k_win, v_win, w, key_mask)
+                return sliding_window_attention(q, k_win, v_win, w, key_mask, scale=1.0)
             except Exception:
                 pass
 
@@ -177,7 +177,7 @@ class NSAAttention(BartAttention):
                     attention_mask, bsz, self.num_heads, n_cmp, self.stride, q.device
                 )
                 return compressed_causal_attention(
-                    q, k_cmp, v_cmp, self.block_size, self.stride, block_ok
+                    q, k_cmp, v_cmp, self.block_size, self.stride, block_ok, scale=1.0
                 )
             except Exception:
                 pass
@@ -232,7 +232,7 @@ class NSAAttention(BartAttention):
                 key_mask = build_gather_key_mask(
                     attention_mask, bsz, self.num_heads, tgt_len, token_idx
                 )
-                return sparse_gather_attention(q, k, v, token_idx, key_mask)
+                return sparse_gather_attention(q, k, v, token_idx, key_mask, scale=1.0)
             except Exception:
                 pass
 

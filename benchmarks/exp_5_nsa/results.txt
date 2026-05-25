@@ -1,4 +1,4 @@
-Experiment: exp_5_nsa | Date: 20260523_103322
-Training Time: 172.79s
-Accuracy: 0.53
-F1: 0.0
+Experiment: exp_5_nsa | Date: 20260525_001921
+Training Time: 45227.32s
+Accuracy: 0.8975
+F1: 0.9026128266033254
