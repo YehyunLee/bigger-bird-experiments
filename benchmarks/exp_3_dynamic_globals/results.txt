@@ -1,4 +1,4 @@
-Experiment: exp_3_dynamic_globals | Date: 20260516_163504
-Training Time: 669.92s
-Accuracy: 0.903
-F1: 0.904621435594887
+Experiment: exp_3_dynamic_globals | Date: 20260527_215118
+Training Time: 147.77s
+Accuracy: 0.88
+F1: 0.875
