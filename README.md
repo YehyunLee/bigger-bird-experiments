@@ -8,12 +8,21 @@ Standard sparse attention models, such as Big Bird and Longformer, utilize fixed
 
 ## Current Experimental Implementations
 
-The repository contains four distinct experimental approaches to sparse attention, each designed to optimize specific aspects of the attention mechanism:
+### Original Single-Idea Methods (exp 1-4)
 
 1.  **DeepSeek-Inspired Top-K Routing (exp_1_deepseek_topk)**: Implements a low-rank projection heuristic to approximate the DeepSeek Lightning Indexer. It projects queries and keys into a low-dimensional space to identify the most relevant tokens before performing high-precision attention on local subsets.
 2.  **Lightning Hybrid Attention (exp_2_lightning_hybrid)**: A dual-path approach that combines sharp local attention (standard Softmax) with an efficient linear attention feature map for long-range global context. This maintains local precision while ensuring linear scaling.
 3.  **Content-Aware Dynamic Globals (exp_3_dynamic_globals)**: Replaces static global tokens with a learned gating network. This network evaluates the "global importance" of every token in the sequence and dynamically selects the top candidates to facilitate global information broadcasting.
 4.  **Permuted Block-Sparse Attention (exp_4_pbs_attn)**: Optimizes for hardware efficiency by calculating affinity at the block level. Tokens are processed in contiguous chunks to maximize GPU memory coalescing and minimize the overhead of random memory access.
+
+### Advanced Hybrid / Diverging Ideas (exp 5-10)
+
+5.  **Bigger Bird — Unified (exp_5_bigger_bird)**: Reimplements the **original proposal**: three components combined in a single attention module — (i) diversity-aware local top-k via MMR-lite, (ii) submodular-style global token selection via learned gate, (iii) biased random "teleports" mixing high-gate candidates with uniform random. Selects only `local_k + globals + teleports` keys per query.
+6.  **DeepSeek + PBS Hybrid (exp_6_deepseek_pbs)**: Combines content-aware routing with GPU-friendly block coalescing. Low-rank Q/K projections identify the top-M most-relevant blocks (PBS-style), then top-K tokens are selected *within* those blocks. Selected indices are sorted to guarantee contiguous memory reads.
+7.  **Layer-Adaptive Sparsity (exp_7_layer_adaptive)**: Different layers do different work — early layers extract local syntax (need more context), middle layers compose semantics, late layers do high-level reasoning. This experiment uses a per-layer top-k schedule: dense at the bottom (`k_early=192`), moderate in the middle (`k_mid=64`), aggressive at the top (`k_late=32`).
+8.  **Token Dropping (exp_8_token_drop)**: Diverges from sparse attention entirely. After 3 dense layers extract local features, computes token importance (L2 norm of hidden state) and **drops the bottom 30%**. Subsequent layers process a shorter sequence — attention cost drops quadratically with `keep_ratio²`.
+9.  **Attention Speculation (exp_9_attn_specul)**: Inspired by speculative decoding. Every layer runs a *fast path* (window + first/middle/last anchors). Every 4th layer also computes the *full* attention as a verifier and adds a KL distillation loss, teaching the fast path to mimic full attention during training. At inference, only the fast path runs.
+10. **GQA + Sparse Routing (exp_10_gqa_sparse)**: Stacks two memory wins from the DeepSeek-V3 playbook. (a) Grouped-Query Attention compresses 12 K/V heads into 4 KV groups via mean pooling — 3× memory reduction. (b) Top-K sparse routing on top — softmax cost drops from O(N) to O(K) per query.
 
 ## Architecture Diagrams
 

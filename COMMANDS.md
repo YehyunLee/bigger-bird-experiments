@@ -10,11 +10,17 @@ python run_experiment.py --list
 ### SMALL (Quick test / 8GB RAM / ~1GB mem usage)
 ```bash
 # Quick sanity check - runs in ~5 min
-python run_experiment.py --exp 0 --size small   # baseline (full attention)
-python run_experiment.py --exp 1 --size small
-python run_experiment.py --exp 2 --size small
-python run_experiment.py --exp 3 --size small
-python run_experiment.py --exp 4 --size small
+python run_experiment.py --exp 0 --size small    # baseline (full attention)
+python run_experiment.py --exp 1 --size small    # DeepSeek Top-K
+python run_experiment.py --exp 2 --size small    # Lightning Hybrid
+python run_experiment.py --exp 3 --size small    # Dynamic Globals
+python run_experiment.py --exp 4 --size small    # PBS Attention
+python run_experiment.py --exp 5 --size small    # Bigger Bird (unified)
+python run_experiment.py --exp 6 --size small    # DeepSeek + PBS hybrid
+python run_experiment.py --exp 7 --size small    # Layer-Adaptive Sparsity
+python run_experiment.py --exp 8 --size small    # Token Dropping
+python run_experiment.py --exp 9 --size small    # Attention Speculation
+python run_experiment.py --exp 10 --size small   # GQA + Sparse Routing
 ```
 **Config:** 500 samples, seq=256, batch=1, 2 epochs
 
@@ -71,12 +77,38 @@ python run_experiment.py --exp 3 --size small \
 
 ## Full Matrix: Experiment × Compute
 
-| Exp | Small | Medium | Big | XL |
-|-----|-----------|--------------|---------------|-----------|
-| 1 DeepSeek | `python run_experiment.py --exp 1 --size small` | `--exp 1 --size medium` | `--exp 1 --size big` | `--exp 1 --size xl` |
-| 2 Lightning | `python run_experiment.py --exp 2 --size small` | `--exp 2 --size medium` | `--exp 2 --size big` | `--exp 2 --size xl` |
-| 3 Dynamic Globals | `python run_experiment.py --exp 3 --size small` | `--exp 3 --size medium` | `--exp 3 --size big` | `--exp 3 --size xl` |
-| 4 PBS | `python run_experiment.py --exp 4 --size small` | `--exp 4 --size medium` | `--exp 4 --size big` | `--exp 4 --size xl` |
+### Original Methods (exp 1-4) + Baseline
+| Exp | Description | Key Params |
+|---|---|---|
+| 0 | Baseline (full O(n²) dense) | - |
+| 1 | DeepSeek Top-K | `top_k=64, low_rank_dim=16` |
+| 2 | Lightning Hybrid | `block_size=128` |
+| 3 | Dynamic Globals | `window_size=64, num_globals=16` |
+| 4 | PBS Attention | `block_size=64, num_blocks=2` |
+
+### New Hybrid / Advanced Ideas (exp 5-10)
+| Exp | Description | Key Params | Why |
+|---|---|---|---|
+| 5 | Bigger Bird (unified) | `local_k=32 + globals=16 + teleports=8 = 56 keys/query` | Original 3-component proposal |
+| 6 | DeepSeek + PBS hybrid | `top_k=64 within top-4 blocks, sorted indices` | Content-aware + coalesced GPU reads |
+| 7 | Layer-Adaptive | `k_early=192, k_mid=64, k_late=32` | Different layers, different sparsity |
+| 8 | Token Dropping | `drop 30% after layer 3` | Reduces n for ALL subsequent layers |
+| 9 | Attention Speculation | `window=64 + 4 anchors, KL distill every 4 layers` | Fast path + verifier distillation |
+| 10 | GQA + Sparse | `kv_groups=4, top_k=64` | Memory + softmax cost both reduced |
+
+Run ALL experiments (small smoke test):
+```bash
+for exp in 0 1 2 3 4 5 6 7 8 9 10; do
+  python run_experiment.py --exp $exp --size small
+done
+```
+
+Run ALL new experiments at scale:
+```bash
+for exp in 5 6 7 8 9 10; do
+  python run_experiment.py --exp $exp --size big
+done
+```
 
 ## Saving & Reloading Weights
 
