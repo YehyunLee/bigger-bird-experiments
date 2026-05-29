@@ -24,6 +24,12 @@ from exp_1_deepseek_topk.model import PatchedModel as DeepSeekModel
 from exp_2_lightning_hybrid.model import PatchedModel as LightningModel
 from exp_3_dynamic_globals.model import PatchedModel as DynamicGlobalsModel
 from exp_4_pbs_attn.model import PatchedModel as PBSModel
+from exp_5_bigger_bird.model import PatchedModel as BiggerBirdModel
+from exp_6_deepseek_pbs.model import PatchedModel as DeepSeekPBSModel
+from exp_7_layer_adaptive.model import PatchedModel as LayerAdaptiveModel
+from exp_8_token_drop.model import PatchedModel as TokenDropModel
+from exp_9_attn_specul.model import PatchedModel as AttnSpeculModel
+from exp_10_gqa_sparse.model import PatchedModel as GQASparseModel
 
 # Compute presets
 COMPUTE_CONFIGS = {
@@ -71,6 +77,12 @@ EXPERIMENT_CONFIGS = {
     2: ("exp_2_lightning_hybrid", LightningModel, {"block_size": 128}),
     3: ("exp_3_dynamic_globals", DynamicGlobalsModel, {"window_size": 64, "num_globals": 16}),
     4: ("exp_4_pbs_attn", PBSModel, {"block_size": 64, "num_blocks": 2}),
+    5: ("exp_5_bigger_bird", BiggerBirdModel, {"window_size": 64, "local_k": 32, "num_globals": 16, "num_teleports": 8, "diversity_lambda": 0.3, "teleport_bias": 0.5}),
+    6: ("exp_6_deepseek_pbs", DeepSeekPBSModel, {"top_k": 64, "low_rank_dim": 16, "block_size": 32, "num_blocks": 4}),
+    7: ("exp_7_layer_adaptive", LayerAdaptiveModel, {"k_early": 192, "k_mid": 64, "k_late": 32, "low_rank_dim": 16}),
+    8: ("exp_8_token_drop", TokenDropModel, {"drop_after_layer": 3, "drop_ratio": 0.3}),
+    9: ("exp_9_attn_specul", AttnSpeculModel, {"window_size": 64, "num_anchors": 4, "verify_every": 4, "verify_kl_weight": 0.1}),
+    10: ("exp_10_gqa_sparse", GQASparseModel, {"kv_groups": 4, "top_k": 64, "low_rank_dim": 16}),
 }
 
 def main():
@@ -93,8 +105,8 @@ Examples:
         """
     )
     
-    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4], required=True,
-                       help="Experiment number (0=baseline, 1-4=sparse methods)")
+    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10], required=True,
+                       help="Experiment number (0=baseline, 1-4=original sparse methods, 5-10=new hybrid/advanced ideas)")
     parser.add_argument("--size", type=str, choices=["small", "medium", "big", "xl"],
                        help="Compute size preset")
     parser.add_argument("--list", action="store_true",

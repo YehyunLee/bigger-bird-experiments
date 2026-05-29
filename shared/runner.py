@@ -28,7 +28,11 @@ def _peak_memory_mb():
 
 
 def _compute_softmax_comparisons(seq_len, model, extra_meta):
-    """Estimate total softmax comparisons across all layers/heads."""
+    """Estimate total softmax comparisons across all layers/heads.
+
+    Returns: int (total softmax key positions evaluated) or None if undetermined.
+    Baseline reference = seq_len * seq_len * n_layers * n_heads.
+    """
     # BART-base: 12 layers, 12 heads
     n_layers = 12
     n_heads = 12
@@ -36,22 +40,59 @@ def _compute_softmax_comparisons(seq_len, model, extra_meta):
     meta = extra_meta or {}
 
     if meta.get("attention") == "full_dense" or model is None:
-        # Baseline: every query attends to all n keys
         return base * seq_len
 
-    # Heuristic based on which experiment params are present
-    if "top_k" in meta:
-        # Exp 1: top_k keys per query
+    # Exp 5: Bigger Bird — local_k + num_globals + num_teleports
+    if "local_k" in meta and "num_globals" in meta and "num_teleports" in meta:
+        M = meta["local_k"] + meta["num_globals"] + meta["num_teleports"]
+        return base * M
+
+    # Exp 6: DeepSeek + PBS — same as top_k per query (sparse high-prec attention)
+    if "top_k" in meta and "block_size" in meta and "num_blocks" in meta:
         return base * meta["top_k"]
-    elif "block_size" in meta and "num_blocks" in meta:
-        # Exp 4: num_blocks * block_size per query
+
+    # Exp 7: Layer-adaptive — sum over layers using per-layer k schedule
+    if "k_early" in meta and "k_mid" in meta and "k_late" in meta:
+        ke, km, kl = meta["k_early"], meta["k_mid"], meta["k_late"]
+        # Per-layer k: 4 early + 4 mid + 4 late (for 12 layers)
+        per_layer_k = [ke]*4 + [km]*4 + [kl]*4
+        return seq_len * n_heads * sum(per_layer_k)
+
+    # Exp 8: Token Drop — keep_ratio fraction after drop_after_layer
+    if "drop_after_layer" in meta and "drop_ratio" in meta:
+        dal = meta["drop_after_layer"]
+        keep = 1.0 - meta["drop_ratio"]
+        # Early layers: full attention. Late layers: attention over kept tokens.
+        early = dal * n_heads * seq_len * seq_len
+        late_len = int(seq_len * keep)
+        late = (n_layers - dal) * n_heads * late_len * late_len
+        return int(early + late)
+
+    # Exp 9: Attention Speculation — window + anchors per query
+    if "window_size" in meta and "num_anchors" in meta:
+        M = meta["window_size"] + meta["num_anchors"]
+        return base * M
+
+    # Exp 10: GQA + Sparse — same softmax count as top_k (GQA saves memory, not softmax)
+    if "kv_groups" in meta and "top_k" in meta:
+        return base * meta["top_k"]
+
+    # Exp 1: DeepSeek Top-K
+    if "top_k" in meta and "low_rank_dim" in meta and "block_size" not in meta:
+        return base * meta["top_k"]
+
+    # Exp 4: PBS — num_blocks * block_size per query
+    if "block_size" in meta and "num_blocks" in meta:
         return base * meta["num_blocks"] * meta["block_size"]
-    elif "window_size" in meta and "num_globals" in meta:
-        # Exp 3: globals + window per query
+
+    # Exp 3: Dynamic Globals — globals + window per query
+    if "window_size" in meta and "num_globals" in meta:
         return base * (meta["num_globals"] + meta["window_size"])
-    elif "block_size" in meta:
-        # Exp 2: Lightning Hybrid — local window only (block_size)
+
+    # Exp 2: Lightning Hybrid — local window only
+    if "block_size" in meta:
         return base * meta["block_size"]
+
     return None
 
 
