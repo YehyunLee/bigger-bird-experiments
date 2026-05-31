@@ -92,6 +92,7 @@ def plot_scaling_trajectories(grouped_runs: Dict[str, List[ScalingRun]], save_di
         'exp_3_dynamic_globals': '#2ca02c',
         'exp_4_pbs_attn': '#d62728',
         'exp_5_nsa': '#9467bd',
+        'exp_6_s2_hhst': '#8c564b',
     }
     
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))

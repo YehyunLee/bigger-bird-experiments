@@ -15,7 +15,8 @@ python run_experiment.py --exp 1 --size small
 python run_experiment.py --exp 2 --size small
 python run_experiment.py --exp 3 --size small
 python run_experiment.py --exp 4 --size small
-python run_experiment.py --exp 5 --size small  
+python run_experiment.py --exp 5 --size small
+python run_experiment.py --exp 6 --size small   # S2-Attention / HHST (arXiv:2407.17678)
 ```
 **Config:** 500 samples, seq=256, batch=1, 2 epochs
 
@@ -26,7 +27,8 @@ python run_experiment.py --exp 1 --size medium
 python run_experiment.py --exp 2 --size medium
 python run_experiment.py --exp 3 --size medium
 python run_experiment.py --exp 4 --size medium
-python run_experiment.py --exp 5 --size medium 
+python run_experiment.py --exp 5 --size medium
+python run_experiment.py --exp 6 --size medium
 ```
 **Config:** 2000 samples, seq=512, batch=2, accum=4, 3 epochs
 
@@ -37,7 +39,8 @@ python run_experiment.py --exp 1 --size big
 python run_experiment.py --exp 2 --size big
 python run_experiment.py --exp 3 --size big
 python run_experiment.py --exp 4 --size big
-python run_experiment.py --exp 5 --size big 
+python run_experiment.py --exp 5 --size big
+python run_experiment.py --exp 6 --size big
 ```
 **Config:** 6000 samples, seq=768, batch=4, accum=8, 3 epochs
 
@@ -81,6 +84,7 @@ python run_experiment.py --exp 3 --size small \
 | 3 Dynamic Globals | `python run_experiment.py --exp 3 --size small` | `--exp 3 --size medium` | `--exp 3 --size big` | `--exp 3 --size xl` |
 | 4 PBS | `python run_experiment.py --exp 4 --size small` | `--exp 4 --size medium` | `--exp 4 --size big` | `--exp 4 --size xl` |
 | 5 NSA | `python run_experiment.py --exp 5 --size small` | `--exp 5 --size medium` | `--exp 5 --size big` | `--exp 5 --size xl` |
+| 6 S2/HHST | `python run_experiment.py --exp 6 --size small` | `--exp 6 --size medium` | `--exp 6 --size big` | `--exp 6 --size xl` |
 
 
 ## Saving & Reloading Weights
@@ -107,6 +111,8 @@ tokenizer = AutoTokenizer.from_pretrained(weights_dir)
 > re-applied at load time). For the baseline (exp 0) the full model is saved as-is.
 >
 > **Exp 5:** Same as other patches — use `PatchedModel` or `patch_bart` from `exp_5_nsa.model` after loading weights.
+>
+> **Exp 6:** S2-Attention / HHST (arXiv:2407.17678) — use `PatchedModel` from `exp_6_s2_hhst.model` after loading weights.
 
 ## Visualize Results
 
