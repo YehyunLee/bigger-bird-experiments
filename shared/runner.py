@@ -8,6 +8,7 @@ from transformers import Trainer, TrainingArguments, DataCollatorWithPadding, Tr
 from transformers.trainer_utils import EvalPrediction
 import json
 from datetime import datetime
+from shared.patched_model import compute_dataset_seq_stats
 
 
 def _reset_peak_memory():
@@ -249,9 +250,14 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
     print(f"[{exp_name}] Evaluating...", flush=True)
     eval_res = trainer.evaluate()
 
+    # Sequence length stats (first row + distribution over train split)
+    train_seq_stats = compute_dataset_seq_stats(ds["train"])
+    seq_len = train_seq_stats["max_len"] or (
+        ds["train"][0]["input_ids"].shape[0] if "input_ids" in ds["train"][0] else 256
+    )
+
     # Inference latency
     device = next(model.parameters()).device
-    seq_len = ds["train"][0]["input_ids"].shape[0] if "input_ids" in ds["train"][0] else 256
     try:
         inf_latency_ms = _measure_inference_latency(model, tokenizer, device, seq_len=seq_len, n_trials=10)
         print(f"[{exp_name}] Inference latency: {inf_latency_ms:.2f} ms/seq")
@@ -282,7 +288,9 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
             "dataset_info": {
                 "train_size": len(ds["train"]),
                 "eval_size": len(ds["validation"]),
-                "max_seq_len": seq_len
+                "max_seq_len": seq_len,
+                "seq_stats_train": train_seq_stats,
+                "fixed_length": (extra_meta or {}).get("fixed_length"),
             },
             "environment": {
                 "use_mps": use_mps,
