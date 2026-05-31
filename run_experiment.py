@@ -258,7 +258,8 @@ Examples:
             **model_params,
             "compute_preset": args.size,
             "train_samples": compute["train_samples"],
-            "seq_length": compute["max_length"]
+            "seq_length": compute["max_length"],
+            "fixed_length": use_fixed,
         },
         save_weights=args.save_weights,
     )
