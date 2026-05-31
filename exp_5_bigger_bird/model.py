@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
-from transformers.modeling_outputs import SequenceClassifierOutput
+
+from shared.patched_model import classification_forward
 
 # Idea A: Unified Bigger Bird
 # Combines the THREE components from the original proposal in a SINGLE attention module:
@@ -201,20 +202,6 @@ def patch_bart(model: nn.Module, **kw):
     _recurse(model)
 
 
-class AttnPool(nn.Module):
-    def __init__(self, hidden_size: int):
-        super().__init__()
-        self.proj = nn.Linear(hidden_size, hidden_size)
-        self.score = nn.Linear(hidden_size, 1, bias=False)
-
-    def forward(self, x, mask):
-        h = torch.tanh(self.proj(x))
-        s = self.score(h).squeeze(-1)
-        s = s.masked_fill(~mask.bool(), torch.finfo(s.dtype).min)
-        a = torch.softmax(s, dim=-1)
-        return torch.bmm(a.unsqueeze(1), x).squeeze(1)
-
-
 class PatchedModel(nn.Module):
     def __init__(self, base_model, window_size=64, local_k=32, num_globals=16, num_teleports=8,
                  diversity_lambda=0.3, teleport_bias=0.5):
@@ -223,34 +210,21 @@ class PatchedModel(nn.Module):
         patch_bart(self.model, window_size=window_size, local_k=local_k,
                    num_globals=num_globals, num_teleports=num_teleports,
                    diversity_lambda=diversity_lambda, teleport_bias=teleport_bias)
-        hidden_size = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
-        self.attn_pool = AttnPool(hidden_size)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):
             return self.model.gradient_checkpointing_enable(**kwargs)
+
     def gradient_checkpointing_disable(self):
         if hasattr(self.model, "gradient_checkpointing_disable"):
             return self.model.gradient_checkpointing_disable()
+
     @property
     def supports_gradient_checkpointing(self):
         return getattr(self.model, "supports_gradient_checkpointing", True)
 
     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
-        outputs = self.model.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-        last_hidden = outputs.last_hidden_state
-        if attention_mask is None:
-            if input_ids is not None and self.model.config.pad_token_id is not None:
-                attention_mask = (input_ids != self.model.config.pad_token_id).long()
-            else:
-                attention_mask = torch.ones(last_hidden.size()[:2], device=last_hidden.device, dtype=torch.long)
-        pooled = self.attn_pool(last_hidden, attention_mask)
-        logits = self.model.classification_head(pooled)
-        loss = None
-        if labels is not None:
-            if labels.dtype != torch.long: labels = labels.long()
-            loss = nn.CrossEntropyLoss()(logits.view(-1, self.model.config.num_labels), labels.view(-1))
-        return SequenceClassifierOutput(loss=loss, logits=logits)
+        return classification_forward(self.model, input_ids, attention_mask, labels, **kwargs)
 
     @property
     def config(self):

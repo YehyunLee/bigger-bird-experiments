@@ -1,0 +1,4 @@
+Experiment: exp_7_layer_adaptive | Date: 20260531_154405
+Training Time: 687.49s
+Accuracy: 0.901
+F1: 0.9007021063189569

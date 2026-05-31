@@ -25,6 +25,12 @@ EXP_BENCH_DIRS = {
     2: "exp_2_lightning_hybrid",
     3: "exp_3_dynamic_globals",
     4: "exp_4_pbs_attn",
+    5: "exp_5_bigger_bird",
+    6: "exp_6_deepseek_pbs",
+    7: "exp_7_layer_adaptive",
+    8: "exp_8_token_drop",
+    9: "exp_9_attn_specul",
+    10: "exp_10_gqa_sparse",
 }
 
 

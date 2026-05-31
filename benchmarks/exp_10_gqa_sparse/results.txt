@@ -1,0 +1,4 @@
+Experiment: exp_10_gqa_sparse | Date: 20260531_153218
+Training Time: 105.33s
+Accuracy: 0.81
+F1: 0.7956989247311828

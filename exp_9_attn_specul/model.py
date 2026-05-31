@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 from transformers.modeling_outputs import SequenceClassifierOutput
 
+from shared.patched_model import classification_forward
+
 # Idea E: Attention Speculation
 # Inspired by speculative decoding: run a CHEAP attention path first, and a
 # FULL attention path occasionally to teach the cheap path via KL.
@@ -140,27 +142,12 @@ def patch_bart(model: nn.Module, window_size=64, num_anchors=4, verify_every=4, 
     return len(layers)
 
 
-class AttnPool(nn.Module):
-    def __init__(self, hidden_size: int):
-        super().__init__()
-        self.proj = nn.Linear(hidden_size, hidden_size)
-        self.score = nn.Linear(hidden_size, 1, bias=False)
-    def forward(self, x, mask):
-        h = torch.tanh(self.proj(x))
-        s = self.score(h).squeeze(-1)
-        s = s.masked_fill(~mask.bool(), torch.finfo(s.dtype).min)
-        a = torch.softmax(s, dim=-1)
-        return torch.bmm(a.unsqueeze(1), x).squeeze(1)
-
-
 class PatchedModel(nn.Module):
     def __init__(self, base_model, window_size=64, num_anchors=4, verify_every=4, verify_kl_weight=0.1):
         super().__init__()
         self.model = base_model
         patch_bart(self.model, window_size=window_size, num_anchors=num_anchors,
                    verify_every=verify_every, verify_kl_weight=verify_kl_weight)
-        hidden = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
-        self.attn_pool = AttnPool(hidden)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):
@@ -180,24 +167,12 @@ class PatchedModel(nn.Module):
         return total
 
     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
-        out = self.model.model(input_ids=input_ids, attention_mask=attention_mask, return_dict=True)
-        last = out.last_hidden_state
-        if attention_mask is None:
-            if input_ids is not None and self.model.config.pad_token_id is not None:
-                attention_mask = (input_ids != self.model.config.pad_token_id).long()
-            else:
-                attention_mask = torch.ones(last.size()[:2], device=last.device, dtype=torch.long)
-        pooled = self.attn_pool(last, attention_mask)
-        logits = self.model.classification_head(pooled)
-        loss = None
-        if labels is not None:
-            if labels.dtype != torch.long: labels = labels.long()
-            loss = nn.CrossEntropyLoss()(logits.view(-1, self.model.config.num_labels), labels.view(-1))
-            # Add KL distillation loss from verifier layers
+        out = classification_forward(self.model, input_ids, attention_mask, labels, **kwargs)
+        if out.loss is not None:
             kl_loss = self._collect_kl()
             if kl_loss is not None:
-                loss = loss + kl_loss
-        return SequenceClassifierOutput(loss=loss, logits=logits)
+                out = SequenceClassifierOutput(loss=out.loss + kl_loss, logits=out.logits)
+        return out
 
     @property
     def config(self):
