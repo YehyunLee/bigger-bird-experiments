@@ -24,6 +24,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from shared.dataset import build_imdb_dataset, DataConfig
 from shared.runner import run_experiment, TrainConfig
+from run_experiment import extend_position_embeddings
 
 from exp_1_deepseek_topk.model import PatchedModel as DeepSeekModel
 from exp_2_lightning_hybrid.model import PatchedModel as LightningModel
@@ -39,7 +40,16 @@ EXPERIMENT_CONFIGS = {
 }
 
 
-def run_single(exp_num, seq_len, train_samples=500, eval_samples=100, epochs=2, batch_size=1, grad_accum=1):
+def run_single(
+    exp_num,
+    seq_len,
+    train_samples=500,
+    eval_samples=100,
+    epochs=2,
+    batch_size=1,
+    grad_accum=1,
+    grad_checkpoint=False,
+):
     """Run one experiment at one sequence length. Returns result dict or None on OOM."""
     exp_name, ModelClass, model_params = EXPERIMENT_CONFIGS[exp_num]
     run_label = f"{exp_name}_seq{seq_len}"
@@ -60,6 +70,10 @@ def run_single(exp_num, seq_len, train_samples=500, eval_samples=100, epochs=2, 
         base_model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
         base_model.config.classifier_dropout = 0.1
 
+        if seq_len > base_model.config.max_position_embeddings:
+            extend_position_embeddings(base_model, seq_len)
+        if grad_checkpoint:
+            base_model.gradient_checkpointing_enable()
         if ModelClass is None:
             model = base_model
         else:
@@ -173,6 +187,8 @@ def main():
                         help="Batch size (auto-lower on OOM not yet supported)")
     parser.add_argument("--accum", type=int, default=1,
                         help="Gradient accumulation steps")
+    parser.add_argument("--grad-checkpoint", action="store_true",
+                        help="Enable gradient checkpointing (recommended for seq>=2048)")
     args = parser.parse_args()
 
     exp_nums = [int(x.strip()) for x in args.exp.split(",")]
@@ -188,6 +204,7 @@ def main():
                 epochs=args.epochs,
                 batch_size=args.batch,
                 grad_accum=args.accum,
+                grad_checkpoint=args.grad_checkpoint,
             )
             results.append(res)
 
