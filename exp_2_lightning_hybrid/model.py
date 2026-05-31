@@ -45,11 +45,9 @@ class LightningHybridAttention(BartAttention):
             q_pos = torch.arange(tgt_len, device=device).view(1, -1, 1)
             col_off = torch.arange(w, device=device).view(1, 1, -1) - half
             key_pos = (q_pos + col_off).clamp(0, src_len - 1)
-            key_allowed = torch.gather(
-                token_mask.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, 1, src_len),
-                2,
-                key_pos.expand(BH, -1, -1),
-            )
+            am = token_mask.unsqueeze(1).unsqueeze(1).expand(bsz, self.num_heads, tgt_len, src_len)
+            am = am.reshape(BH, tgt_len, src_len)
+            key_allowed = torch.gather(am, 2, key_pos.expand(BH, -1, -1))
             scores = scores.masked_fill(~key_allowed, neg_inf)
 
         attn = F.softmax(scores, dim=-1)

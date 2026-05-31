@@ -19,6 +19,18 @@ import torch
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+EXP_BENCH_DIRS = {
+    0: "exp_0_baseline",
+    1: "exp_1_deepseek_topk",
+    2: "exp_2_lightning_hybrid",
+    3: "exp_3_dynamic_globals",
+    4: "exp_4_pbs_attn",
+}
+
+
+def exp_bench_dir(exp: int) -> str:
+    return EXP_BENCH_DIRS.get(exp, f"exp_{exp}")
+
 
 def needs_cpu_for_seq(seq):
     """Apple MPS cannot allocate >12GB buffers; seq>=2048 training exceeds that."""
@@ -45,7 +57,7 @@ def run_single(exp, seq, train_samples=500, eval_samples=100, grad_checkpoint=Fa
     if force_cpu or needs_cpu_for_seq(seq):
         cmd.append("--cpu")
 
-    exp_name = f"exp_{exp}_baseline" if exp == 0 else f"exp_{exp}"
+    exp_name = exp_bench_dir(exp)
     device_note = " [CPU]" if (force_cpu or needs_cpu_for_seq(seq)) else ""
     print(f"\n{'='*70}")
     print(f"Running: {exp_name} | seq={seq}{device_note}")
@@ -60,8 +72,7 @@ def run_single(exp, seq, train_samples=500, eval_samples=100, grad_checkpoint=Fa
         print(f"[FAIL] {exp_name} @ seq={seq}")
         return None
     
-    # Find the latest eval JSON
-    bench_dir = os.path.join("benchmarks", exp_name)
+    bench_dir = os.path.join(os.path.dirname(__file__), "benchmarks", exp_name)
     if not os.path.isdir(bench_dir):
         return None
     
@@ -118,7 +129,7 @@ def main():
             # Skip baseline if it already OOMed at a shorter seq length
             if exp == 0 and seq in baseline_oom_seqs:
                 print(f"\n[SKIP] Baseline known to OOM at seq={seq}, skipping.")
-                all_results.append({"exp": 0, "exp_name": "exp_0_baseline", "seq": seq, "oom": True})
+                all_results.append({"exp": 0, "exp_name": exp_bench_dir(0), "seq": seq, "oom": True})
                 continue
 
             res = run_single(
@@ -130,7 +141,7 @@ def main():
             )
             
             if res is None:
-                all_results.append({"exp": exp, "exp_name": f"exp_{exp}", "seq": seq, "oom": True})
+                all_results.append({"exp": exp, "exp_name": exp_bench_dir(exp), "seq": seq, "oom": True})
                 if exp == 0:
                     baseline_oom_seqs.add(seq)
             else:
@@ -155,20 +166,26 @@ def main():
     
     print("="*100)
 
-    # Save structured JSON
-    out_path = os.path.join("benchmarks", f"long_context_sweep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    with open(out_path, "w") as f:
-        json.dump({
-            "config": {
-                "seqs": seqs,
-                "exps": exps,
-                "train_samples": args.train_samples,
-                "eval_samples": args.eval_samples,
-                "grad_checkpoint": args.grad_checkpoint,
-            },
-            "results": all_results,
-        }, f, indent=2)
-    print(f"\nSaved sweep results to: {out_path}")
+    bench_root = os.path.join(os.path.dirname(__file__), "benchmarks")
+    payload = {
+        "config": {
+            "seqs": seqs,
+            "exps": exps,
+            "train_samples": args.train_samples,
+            "eval_samples": args.eval_samples,
+            "grad_checkpoint": args.grad_checkpoint,
+            "fixed_length": True,
+            "timestamp": datetime.now().isoformat(),
+        },
+        "results": all_results,
+    }
+    ts_path = os.path.join(bench_root, f"long_context_sweep_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    latest_path = os.path.join(bench_root, "long_context_sweep_results.json")
+    for out_path in (ts_path, latest_path):
+        with open(out_path, "w") as f:
+            json.dump(payload, f, indent=2)
+    print(f"\nSaved sweep results to: {ts_path}")
+    print(f"Also updated: {latest_path}")
 
 
 if __name__ == "__main__":

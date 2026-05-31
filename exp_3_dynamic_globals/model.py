@@ -89,7 +89,8 @@ class DynamicGlobalAttention(BartAttention):
                 col_off = torch.arange(w, device=Q.device).view(1, 1, -1) - half
                 win_pos = (q_pos + col_off).clamp(0, src_len - 1)
                 key_pos = torch.cat([g_pos, win_pos.expand(BH, -1, -1)], dim=-1)
-                am = token_mask.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, 1, src_len)
+                am = token_mask.unsqueeze(1).unsqueeze(1).expand(bsz, self.num_heads, tgt_len, src_len)
+                am = am.reshape(BH, tgt_len, src_len)
                 allowed = torch.gather(am, 2, key_pos)
                 scores = scores.masked_fill(~allowed, -1e9)
 

@@ -34,7 +34,26 @@ class ExperimentResult:
     softmax_comparisons: int = None
     raw: Dict[str, Any] = None
 
-def load_all_results() -> List[ExperimentResult]:
+def _is_fixed_length(meta: Dict[str, Any]) -> bool:
+    if meta.get("fixed_length"):
+        return True
+    di = meta.get("dataset_info", {})
+    mc = meta.get("model_config", {})
+    return bool(di.get("fixed_length") or mc.get("fixed_length"))
+
+
+def _passes_filters(meta: Dict[str, Any], fixed_length_only: bool, min_timestamp: str) -> bool:
+    if fixed_length_only and not _is_fixed_length(meta):
+        return False
+    if min_timestamp and meta.get("timestamp", "") < min_timestamp:
+        return False
+    return True
+
+
+def load_all_results(
+    fixed_length_only: bool = False,
+    min_timestamp: str = "",
+) -> List[ExperimentResult]:
     """Load all experiment results from benchmark JSON files."""
     results = []
     
@@ -49,6 +68,8 @@ def load_all_results() -> List[ExperimentResult]:
                     data = json.load(f)
                 
                 meta = data["experiment_metadata"]
+                if not _passes_filters(meta, fixed_length_only, min_timestamp):
+                    continue
                 perf = data["performance_metrics"]
                 
                 results.append(ExperimentResult(
@@ -191,7 +212,31 @@ def export_csv(results: List[ExperimentResult], csv_path: str):
 
 
 def main():
-    results = load_all_results()
+    import argparse
+    parser = argparse.ArgumentParser(description="Compare experiment benchmark JSONs")
+    parser.add_argument(
+        "--fixed-length-only",
+        action="store_true",
+        help="Only include runs with experiment_metadata.fixed_length=true",
+    )
+    parser.add_argument(
+        "--min-timestamp",
+        type=str,
+        default="",
+        help="Only include runs at or after this timestamp (e.g. 20260531)",
+    )
+    parser.add_argument(
+        "--csv",
+        type=str,
+        default="",
+        help="CSV output path (default: benchmarks/comparison.csv or comparison_fixed_length.csv)",
+    )
+    args = parser.parse_args()
+
+    results = load_all_results(
+        fixed_length_only=args.fixed_length_only,
+        min_timestamp=args.min_timestamp,
+    )
 
     if not results:
         print("No experiment results found. Run some experiments first!")
@@ -199,12 +244,21 @@ def main():
 
     groups = group_by_sample_size(results)
 
-    print(f"\nFound {len(results)} runs across {len(groups)} sample-size group(s): {sorted(groups.keys())}")
+    label = "fixed-length " if args.fixed_length_only else ""
+    print(f"\nFound {len(results)} {label}runs across {len(groups)} sample-size group(s): {sorted(groups.keys())}")
+    if args.fixed_length_only or args.min_timestamp:
+        print(
+            "Note: Pre-May-2026 6000-sample runs used dynamic padding (~166 tokens). "
+            "See context/long-context-leaderboard-may2026.md."
+        )
 
     print_comparison_table(groups)
     plot_comparison(groups, out_dir=BENCHMARK_DIR)
 
-    csv_path = os.path.join(BENCHMARK_DIR, "comparison.csv")
+    csv_path = args.csv or os.path.join(
+        BENCHMARK_DIR,
+        "comparison_fixed_length.csv" if args.fixed_length_only else "comparison.csv",
+    )
     export_csv(results, csv_path)
 
 if __name__ == "__main__":
