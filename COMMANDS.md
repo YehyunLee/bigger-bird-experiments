@@ -132,6 +132,33 @@ tokenizer = AutoTokenizer.from_pretrained(weights_dir)
 > **Note:** For patched experiments (exp 1–4) the *base* BART weights are saved (patches are
 > re-applied at load time). For the baseline (exp 0) the full model is saved as-is.
 
+## Long-Context Stress Tests
+
+BART-base has a native limit of 1024 tokens. The `--long` preset extends position embeddings and uses fixed-length padding to stress the full context window.
+
+```bash
+# Single long-context run (seq=2048, 500 train samples, fixed padding)
+python run_experiment.py --exp 5 --size long --grad-checkpoint
+
+# Override sequence length beyond 2048 (extends position embeddings automatically)
+python run_experiment.py --exp 5 --size long --seq 4096 --grad-checkpoint
+
+# Baseline at 2048 (will likely OOM without grad-checkpoint on 16GB GPU)
+python run_experiment.py --exp 0 --size long --seq 2048 --grad-checkpoint
+
+# Full sweep: baseline vs sparse at 1024, 2048, 4096
+python run_long_context_sweep.py --seqs 1024,2048,4096 --exps 0,3,5,8 --grad-checkpoint
+
+# Sparse-only sweep (skip baseline OOMs)
+python run_long_context_sweep.py --seqs 2048,4096,8192 --exps 3,5,8,10
+```
+
+**Key flags for long context:**
+- `--size long` — 500 train samples, seq=2048, batch=1, fixed-length padding
+- `--seq <N>` — override sequence length (auto-extends position embeddings if >1024)
+- `--fixed-length` — pad every sample to max_length (full attention workload)
+- `--grad-checkpoint` — essential for baseline at 2048+ to avoid OOM
+
 ## Visualize Results
 
 ```bash

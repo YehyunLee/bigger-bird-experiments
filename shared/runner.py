@@ -142,6 +142,7 @@ class TrainConfig:
     lr: float = 2e-5
     weight_decay: float = 0.01
     warmup_ratio: float = 0.10
+    use_cpu: bool = False
 
 def preprocess_logits_for_metrics(logits, labels):
     if isinstance(logits, (tuple, list)):
@@ -155,7 +156,9 @@ def compute_metrics(eval_pred):
         preds, labels = eval_pred
     return {"accuracy": accuracy_score(labels, preds), "f1": f1_score(labels, preds)}
 
-def device_flags():
+def device_flags(force_cpu=False):
+    if force_cpu:
+        return False, False, False, False
     use_cuda = torch.cuda.is_available()
     use_mps = getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available()
     fp16 = False
@@ -184,7 +187,7 @@ class TrajectoryCallback(TrainerCallback):
             self.trajectory.append(point)
 
 def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_meta: dict = None, callbacks=None, save_weights: bool = False):
-    fp16, bf16, torch_compile, use_mps = device_flags()
+    fp16, bf16, torch_compile, use_mps = device_flags(force_cpu=cfg.use_cpu)
     eval_accum = 1 if use_mps else 8
     
     out_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "benchmarks", exp_name))
@@ -213,6 +216,7 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         dataloader_pin_memory=False,
         gradient_checkpointing=False,
         torch_compile=torch_compile,
+        use_cpu=cfg.use_cpu,
         optim="adamw_torch",
         eval_accumulation_steps=eval_accum,
     )
