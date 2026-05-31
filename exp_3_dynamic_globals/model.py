@@ -3,13 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 
+from shared.kernels import build_gather_key_mask, should_use_triton, sparse_gather_attention
+
 # Idea: Dynamic Content-Aware Globals
 # Instead of fixed CLS tokens or random tokens, a lightweight gating network 
 # decides which tokens are currently 'global' and should be broadcast 
 # to all other tokens. The gate runs in linear time. We combine this with a standard sliding window.
 
 class DynamicGlobalAttention(BartAttention):
-    def __init__(self, base_attn: BartAttention, window_size: int = 64, num_globals: int = 16):
+    def __init__(self, base_attn: BartAttention, window_size: int = 64, num_globals: int = 16, use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -24,9 +26,13 @@ class DynamicGlobalAttention(BartAttention):
         
         self.window_size = window_size
         self.num_globals = num_globals
+        self.use_triton = use_triton
         
         # New: Gate to predict token "globalness" directly from inputs
         self.global_gate = nn.Linear(self.embed_dim, 1)
+
+    def _use_triton_kernels(self, q: torch.Tensor) -> bool:
+        return should_use_triton(self.use_triton, q, training=self.training)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -99,46 +105,55 @@ class DynamicGlobalAttention(BartAttention):
             abs_idx = torch.cat([global_idx_exp, local_idx_exp], dim=-1) # [BH, Tq, G + W]
             M = abs_idx.size(-1)
 
-            # 3. Gather and Compute Attention
-            idx_gather = abs_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
-            K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
-            V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
+            out = None
+            if self._use_triton_kernels(Q):
+                try:
+                    key_mask = build_gather_key_mask(attention_mask, bsz, self.num_heads, tgt_len, abs_idx)
+                    out = sparse_gather_attention(Q, K, V, abs_idx, key_mask, scale=1.0)
+                except Exception:
+                    out = None
 
-            scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2) # [BH, Tq, M]
-            
-            if attention_mask is not None:
-                am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
-                if am_bool.dim() == 2: am_bool = am_bool[:, None, None, :]
-                am_small = am_bool.expand(bsz, 1, tgt_len, src_len)
-                abs_idx_hb = abs_idx.view(self.num_heads, bsz, tgt_len, M)
-                
-                allowed_chunks = []
-                for h in range(self.num_heads):
-                    allowed_h = torch.gather(am_small, -1, abs_idx_hb[h].unsqueeze(1)).squeeze(1) # [B, Tq, M]
-                    allowed_chunks.append(allowed_h)
-                allowed = torch.cat(allowed_chunks, dim=0) # [BH, Tq, M]
-                scores_sel = scores_sel.masked_fill(~allowed, -1e9)
-            
-            attn_probs = F.softmax(scores_sel, dim=-1)
-            attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
-            
-            out = torch.bmm(
-                attn_probs.reshape(BH * tgt_len, 1, M),
-                V_sel.reshape(BH * tgt_len, M, self.head_dim)
-            ).reshape(BH, tgt_len, self.head_dim)
+            if out is None:
+                # 3. Gather and Compute Attention
+                idx_gather = abs_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
+                K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
+                V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
+
+                scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2) # [BH, Tq, M]
+
+                if attention_mask is not None:
+                    am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
+                    if am_bool.dim() == 2: am_bool = am_bool[:, None, None, :]
+                    am_small = am_bool.expand(bsz, 1, tgt_len, src_len)
+                    abs_idx_hb = abs_idx.view(self.num_heads, bsz, tgt_len, M)
+
+                    allowed_chunks = []
+                    for h in range(self.num_heads):
+                        allowed_h = torch.gather(am_small, -1, abs_idx_hb[h].unsqueeze(1)).squeeze(1) # [B, Tq, M]
+                        allowed_chunks.append(allowed_h)
+                    allowed = torch.cat(allowed_chunks, dim=0) # [BH, Tq, M]
+                    scores_sel = scores_sel.masked_fill(~allowed, -1e9)
+
+                attn_probs = F.softmax(scores_sel, dim=-1)
+                attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
+
+                out = torch.bmm(
+                    attn_probs.reshape(BH * tgt_len, 1, M),
+                    V_sel.reshape(BH * tgt_len, M, self.head_dim)
+                ).reshape(BH, tgt_len, self.head_dim)
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
         return (attn_output, None)
 
-def patch_bart(model: nn.Module, window_size: int = 64, num_globals: int = 16):
+def patch_bart(model: nn.Module, window_size: int = 64, num_globals: int = 16, use_triton: bool = True):
     def _recurse(module: nn.Module):
         for name, child in list(module.named_children()):
             if isinstance(child, BartAttention):
                 if getattr(child, "is_decoder", False):
                     continue
-                setattr(module, name, DynamicGlobalAttention(child, window_size, num_globals))
+                setattr(module, name, DynamicGlobalAttention(child, window_size, num_globals, use_triton=use_triton))
             else:
                 _recurse(child)
     _recurse(model)
@@ -159,10 +174,11 @@ class AttnPool(nn.Module):
 from transformers.modeling_outputs import SequenceClassifierOutput
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, window_size=64, num_globals=16):
+    def __init__(self, base_model, window_size=64, num_globals=16, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, window_size=window_size, num_globals=num_globals)
+        self.use_triton = use_triton
+        patch_bart(self.model, window_size=window_size, num_globals=num_globals, use_triton=use_triton)
         hidden_size = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
         self.attn_pool = AttnPool(hidden_size)
 

@@ -3,13 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 
+from shared.kernels import build_gather_key_mask, should_use_triton, sparse_gather_attention
+
 # Idea 4: Permuted Block-Sparse Attention (PBS-Attn)
 # Instead of fine-grained token sorting, we do chunk-wise / block-wise evaluation.
 # We pool queries and keys into blocks, find the top `num_blocks` correlated blocks,
 # and gather those tokens. This avoids random memory reads and promotes coalesced GPU loads!
 
 class PBSAttention(BartAttention):
-    def __init__(self, base_attn: BartAttention, block_size: int = 32, num_blocks: int = 4):
+    def __init__(self, base_attn: BartAttention, block_size: int = 32, num_blocks: int = 4, use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -23,6 +25,10 @@ class PBSAttention(BartAttention):
         self.out_proj.load_state_dict(base_attn.out_proj.state_dict())
         self.block_size = block_size
         self.num_blocks = num_blocks
+        self.use_triton = use_triton
+
+    def _use_triton_kernels(self, q: torch.Tensor) -> bool:
+        return should_use_triton(self.use_triton, q, training=self.training)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -88,42 +94,52 @@ class PBSAttention(BartAttention):
             token_idx = (base_idx + block_offset).reshape(BH, tgt_len, M * self.block_size) 
             
             M_tokens = M * self.block_size
-            idx_gather = token_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
-            K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
-            V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
-            
-            scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2)
-            
-            if attention_mask is not None:
-                am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
-                if am_bool.dim() == 2: am_bool = am_bool[:, None, None, :]
-                am_small = am_bool.expand(bsz, 1, tgt_len, src_len)
-                abs_idx_hb = token_idx.view(self.num_heads, bsz, tgt_len, M_tokens)
-                allowed_chunks = []
-                for h in range(self.num_heads):
-                    allowed_h = torch.gather(am_small, -1, abs_idx_hb[h].unsqueeze(1)).squeeze(1)
-                    allowed_chunks.append(allowed_h)
-                allowed = torch.cat(allowed_chunks, dim=0)
-                scores_sel = scores_sel.masked_fill(~allowed, -1e9)
-            
-            attn_probs = F.softmax(scores_sel, dim=-1)
-            attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
-            out = torch.bmm(
-                attn_probs.reshape(BH * tgt_len, 1, M_tokens),
-                V_sel.reshape(BH * tgt_len, M_tokens, self.head_dim)
-            ).reshape(BH, tgt_len, self.head_dim)
+
+            out = None
+            if self._use_triton_kernels(Q):
+                try:
+                    key_mask = build_gather_key_mask(attention_mask, bsz, self.num_heads, tgt_len, token_idx)
+                    out = sparse_gather_attention(Q, K, V, token_idx, key_mask, scale=1.0)
+                except Exception:
+                    out = None
+
+            if out is None:
+                idx_gather = token_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
+                K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
+                V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_gather)
+
+                scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2)
+
+                if attention_mask is not None:
+                    am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
+                    if am_bool.dim() == 2: am_bool = am_bool[:, None, None, :]
+                    am_small = am_bool.expand(bsz, 1, tgt_len, src_len)
+                    abs_idx_hb = token_idx.view(self.num_heads, bsz, tgt_len, M_tokens)
+                    allowed_chunks = []
+                    for h in range(self.num_heads):
+                        allowed_h = torch.gather(am_small, -1, abs_idx_hb[h].unsqueeze(1)).squeeze(1)
+                        allowed_chunks.append(allowed_h)
+                    allowed = torch.cat(allowed_chunks, dim=0)
+                    scores_sel = scores_sel.masked_fill(~allowed, -1e9)
+
+                attn_probs = F.softmax(scores_sel, dim=-1)
+                attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
+                out = torch.bmm(
+                    attn_probs.reshape(BH * tgt_len, 1, M_tokens),
+                    V_sel.reshape(BH * tgt_len, M_tokens, self.head_dim)
+                ).reshape(BH, tgt_len, self.head_dim)
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
         attn_output = self.out_proj(attn_output)
         return (attn_output, None)
 
-def patch_bart(model: nn.Module, block_size: int = 32, num_blocks: int = 4):
+def patch_bart(model: nn.Module, block_size: int = 32, num_blocks: int = 4, use_triton: bool = True):
     def _recurse(module: nn.Module):
         for name, child in list(module.named_children()):
             if isinstance(child, BartAttention):
                 if getattr(child, "is_decoder", False): continue
-                setattr(module, name, PBSAttention(child, block_size, num_blocks))
+                setattr(module, name, PBSAttention(child, block_size, num_blocks, use_triton=use_triton))
             else:
                 _recurse(child)
     _recurse(model)
@@ -144,10 +160,11 @@ class AttnPool(nn.Module):
 from transformers.modeling_outputs import SequenceClassifierOutput
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, block_size=32, num_blocks=4):
+    def __init__(self, base_model, block_size=32, num_blocks=4, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, block_size=block_size, num_blocks=num_blocks)
+        self.use_triton = use_triton
+        patch_bart(self.model, block_size=block_size, num_blocks=num_blocks, use_triton=use_triton)
         hidden_size = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
         self.attn_pool = AttnPool(hidden_size)
 

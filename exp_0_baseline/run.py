@@ -11,7 +11,11 @@ def main():
     model_name = "facebook/bart-base"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+    # Use PyTorch's fused scaled-dot-product attention (Flash / mem-efficient) for the
+    # dense baseline. There is no benefit to a hand-written Triton kernel over cuDNN/Flash here.
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name, num_labels=2, attn_implementation="sdpa"
+    )
     model.config.classifier_dropout = 0.1
 
     data_cfg = DataConfig(train_samples=6000, eval_samples=1000, max_length=768)

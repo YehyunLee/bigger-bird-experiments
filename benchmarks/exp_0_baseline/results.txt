@@ -1,4 +1,4 @@
-Experiment: exp_0_baseline | Date: 20260516_161822
-Training Time: 216.71s
-Accuracy: 0.931
-F1: 0.9305135951661632
+Experiment: exp_0_baseline | Date: 20260531_095007
+Training Time: 157.30s
+Accuracy: 0.88
+F1: 0.8775510204081632

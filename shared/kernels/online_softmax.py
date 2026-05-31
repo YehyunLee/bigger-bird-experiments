@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from .common import MASK_SCORE_FP32, MODE_COMPRESSED, MODE_GATHER, MODE_WINDOW, ceil_pow2, _TRITON_IMPORTED
+from .common import MASK_SCORE_FP32, MODE_GATHER, MODE_WINDOW, ceil_pow2, _TRITON_IMPORTED
 
 if _TRITON_IMPORTED:
     import triton
@@ -45,6 +45,7 @@ if _TRITON_IMPORTED:
         window_size: tl.constexpr,
         block_size: tl.constexpr,
         stride_blocks: tl.constexpr,
+        radius: tl.constexpr,
         SCALE,
         MASK_VAL: tl.constexpr,
     ):
@@ -62,7 +63,7 @@ if _TRITON_IMPORTED:
         acc = tl.zeros([BLOCK_D], dtype=tl.float32)
 
         for j in range(n_keys):
-            # MODE: 0=gather, 1=window, 2=compressed
+            # MODE: 0=gather, 1=window, 2=compressed, 3=band
             if MODE == 0:
                 idx = tl.load(Idx + bh * stride_ib + t * stride_it + j * stride_im).to(tl.int32)
                 idx = tl.minimum(tl.maximum(idx, 0), seq_len - 1)
@@ -72,10 +73,15 @@ if _TRITON_IMPORTED:
                 idx = start + j
                 idx = tl.minimum(idx, seq_len - 1)
                 valid = True
-            else:
+            elif MODE == 2:
                 idx = j
                 block_end = j * stride_blocks + block_size
                 valid = block_end <= t
+            else:
+                # Symmetric band: query t attends to keys in [t-radius, t+radius].
+                raw = tl.maximum(0, t - radius) + j
+                valid = (raw <= t + radius) and (raw <= seq_len - 1)
+                idx = tl.minimum(raw, seq_len - 1)
 
             k_ptr = K + bh * stride_kb + idx * stride_ks + d_offs * stride_kd
             v_ptr = V + bh * stride_vb + idx * stride_vs + d_offs * stride_vd
@@ -90,8 +96,10 @@ if _TRITON_IMPORTED:
                     keep = tl.load(Mask + bh * stride_mb + t * stride_mt + j * stride_mm).to(tl.int1)
                 elif MODE == 1:
                     keep = tl.load(Mask + bh * stride_mb + idx * stride_mt).to(tl.int1)
-                else:
+                elif MODE == 2:
                     keep = tl.load(Mask + bh * stride_mb + j * stride_mt).to(tl.int1)
+                else:
+                    keep = tl.load(Mask + bh * stride_mb + idx * stride_mt).to(tl.int1)
                 s = tl.where(keep, s, MASK_VAL)
 
             m_new = tl.maximum(m_i, s)
@@ -118,6 +126,7 @@ if _TRITON_IMPORTED:
         window_size: int = 1,
         block_size: int = 1,
         stride_blocks: int = 1,
+        radius: int = 0,
     ) -> torch.Tensor:
         bh, tgt_len, head_dim = q.shape
         out = torch.empty_like(q)
@@ -160,6 +169,7 @@ if _TRITON_IMPORTED:
             window_size=window_size,
             block_size=block_size,
             stride_blocks=stride_blocks,
+            radius=radius,
             SCALE=scale,
             MASK_VAL=MASK_SCORE_FP32,
             num_warps=4 if head_dim <= 64 else 8,

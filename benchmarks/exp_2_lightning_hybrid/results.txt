@@ -1,4 +1,4 @@
-Experiment: exp_2_lightning_hybrid | Date: 20260516_180726
-Training Time: 6.64s
-Accuracy: 0.58
-F1: 0.5531914893617021
+Experiment: exp_2_lightning_hybrid | Date: 20260531_095633
+Training Time: 169.78s
+Accuracy: 0.64
+F1: 0.6086956521739131

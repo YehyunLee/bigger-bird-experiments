@@ -3,12 +3,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 
+from shared.kernels import should_use_triton, sparse_gather_attention
+
 # We implement a Top-K sparse attention inspired by DeepSeek's Lightning Indexer.
 # For efficiency in Python without custom kernels, we approximate the indexer by computing 
 # a low-rank score matrix O(N^2 * D_{low}), fetching the top K, and doing actual attention over K.
 
 class DeepSeekTopKAttention(BartAttention):
-    def __init__(self, base_attn: BartAttention, top_k: int = 128, low_rank_dim: int = 16):
+    def __init__(self, base_attn: BartAttention, top_k: int = 128, low_rank_dim: int = 16, use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -23,6 +25,10 @@ class DeepSeekTopKAttention(BartAttention):
         
         self.top_k = top_k
         self.low_rank_dim = low_rank_dim
+        self.use_triton = use_triton
+
+    def _use_triton_kernels(self, q: torch.Tensor) -> bool:
+        return should_use_triton(self.use_triton, q, training=self.training)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -87,23 +93,32 @@ class DeepSeekTopKAttention(BartAttention):
             
             # Extract top K
             _, topk_indices = torch.topk(rough_scores, k=self.top_k, dim=-1) # [BH, Tq, K]
-            
-            # Gather precise K and V
-            idx_exp = topk_indices.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
-            K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_exp)
-            V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_exp)
 
-            # Precise score calc
-            scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2) # [BH, Tq, K]
-            
-            attn_probs = F.softmax(scores_sel, dim=-1)
-            attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
-            
-            # Multiply by V
-            out = torch.bmm(
-                attn_probs.reshape(BH * tgt_len, 1, self.top_k),
-                V_sel.reshape(BH * tgt_len, self.top_k, self.head_dim)
-            ).reshape(BH, tgt_len, self.head_dim)
+            out = None
+            if self._use_triton_kernels(Q):
+                try:
+                    # Fused gather attention (legacy path applies no extra key mask here)
+                    out = sparse_gather_attention(Q, K, V, topk_indices, None, scale=1.0)
+                except Exception:
+                    out = None
+
+            if out is None:
+                # Gather precise K and V
+                idx_exp = topk_indices.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
+                K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_exp)
+                V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_exp)
+
+                # Precise score calc
+                scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2) # [BH, Tq, K]
+
+                attn_probs = F.softmax(scores_sel, dim=-1)
+                attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
+
+                # Multiply by V
+                out = torch.bmm(
+                    attn_probs.reshape(BH * tgt_len, 1, self.top_k),
+                    V_sel.reshape(BH * tgt_len, self.top_k, self.head_dim)
+                ).reshape(BH, tgt_len, self.head_dim)
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                         .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
@@ -111,13 +126,13 @@ class DeepSeekTopKAttention(BartAttention):
         
         return (attn_output, None)
 
-def patch_bart(model: nn.Module, top_k: int = 128, low_rank_dim: int = 16):
+def patch_bart(model: nn.Module, top_k: int = 128, low_rank_dim: int = 16, use_triton: bool = True):
     def _recurse(module: nn.Module):
         for name, child in list(module.named_children()):
             if isinstance(child, BartAttention):
                 if getattr(child, "is_decoder", False):
                     continue
-                setattr(module, name, DeepSeekTopKAttention(child, top_k, low_rank_dim))
+                setattr(module, name, DeepSeekTopKAttention(child, top_k, low_rank_dim, use_triton=use_triton))
             else:
                 _recurse(child)
     _recurse(model)
@@ -136,10 +151,11 @@ class AttnPool(nn.Module):
         return torch.bmm(a.unsqueeze(1), x).squeeze(1)
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, top_k=128, low_rank_dim=16):
+    def __init__(self, base_model, top_k=128, low_rank_dim=16, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, top_k=top_k, low_rank_dim=low_rank_dim)
+        self.use_triton = use_triton
+        patch_bart(self.model, top_k=top_k, low_rank_dim=low_rank_dim, use_triton=use_triton)
         hidden_size = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
         self.attn_pool = AttnPool(hidden_size)
 

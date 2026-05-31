@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 from transformers.modeling_outputs import SequenceClassifierOutput
 
+from shared.kernels import build_gather_key_mask, should_use_triton, sparse_gather_attention
+
 
 class S2HHSTAttention(BartAttention):
 
@@ -14,6 +16,7 @@ class S2HHSTAttention(BartAttention):
         local_blocks: int = 2,
         stride_blocks: int | None = None,
         use_sink: bool = True,
+        use_triton: bool = True,
     ):
         super().__init__(
             embed_dim=base_attn.embed_dim,
@@ -32,7 +35,11 @@ class S2HHSTAttention(BartAttention):
         # Vertical stride in blocks; default = num_heads for heterogeneous complete union
         self.stride_blocks = stride_blocks if stride_blocks is not None else self.num_heads
         self.use_sink = use_sink
+        self.use_triton = use_triton
         self._index_cache: dict[tuple[int, str], torch.Tensor] = {}
+
+    def _use_triton_kernels(self, q: torch.Tensor) -> bool:
+        return should_use_triton(self.use_triton, q, training=self.training)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -137,30 +144,39 @@ class S2HHSTAttention(BartAttention):
             abs_idx = idx_hqt.unsqueeze(1).expand(self.num_heads, bsz, tgt_len, m)
             abs_idx = abs_idx.reshape(bh, tgt_len, m)
 
-            idx_gather = abs_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
-            k_sel = torch.gather(k.unsqueeze(1).expand(bh, tgt_len, src_len, self.head_dim), 2, idx_gather)
-            v_sel = torch.gather(v.unsqueeze(1).expand(bh, tgt_len, src_len, self.head_dim), 2, idx_gather)
+            out = None
+            if self._use_triton_kernels(q):
+                try:
+                    key_mask = build_gather_key_mask(attention_mask, bsz, self.num_heads, tgt_len, abs_idx)
+                    out = sparse_gather_attention(q, k, v, abs_idx, key_mask, scale=1.0)
+                except Exception:
+                    out = None
 
-            scores_sel = torch.matmul(q.unsqueeze(2), k_sel.transpose(-1, -2)).squeeze(2)
+            if out is None:
+                idx_gather = abs_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
+                k_sel = torch.gather(k.unsqueeze(1).expand(bh, tgt_len, src_len, self.head_dim), 2, idx_gather)
+                v_sel = torch.gather(v.unsqueeze(1).expand(bh, tgt_len, src_len, self.head_dim), 2, idx_gather)
 
-            if attention_mask is not None:
-                am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
-                if am_bool.dim() == 2:
-                    am_bool = am_bool[:, None, None, :]
-                am_small = am_bool.expand(bsz, 1, tgt_len, src_len)
-                abs_idx_hb = abs_idx.view(self.num_heads, bsz, tgt_len, m)
-                allowed = []
-                for h in range(self.num_heads):
-                    allowed.append(torch.gather(am_small, -1, abs_idx_hb[h].unsqueeze(1)).squeeze(1))
-                allowed = torch.cat(allowed, dim=0)
-                scores_sel = scores_sel.masked_fill(~allowed, -1e9)
+                scores_sel = torch.matmul(q.unsqueeze(2), k_sel.transpose(-1, -2)).squeeze(2)
 
-            attn_probs = F.softmax(scores_sel, dim=-1)
-            attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
-            out = torch.bmm(
-                attn_probs.reshape(bh * tgt_len, 1, m),
-                v_sel.reshape(bh * tgt_len, m, self.head_dim),
-            ).reshape(bh, tgt_len, self.head_dim)
+                if attention_mask is not None:
+                    am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
+                    if am_bool.dim() == 2:
+                        am_bool = am_bool[:, None, None, :]
+                    am_small = am_bool.expand(bsz, 1, tgt_len, src_len)
+                    abs_idx_hb = abs_idx.view(self.num_heads, bsz, tgt_len, m)
+                    allowed = []
+                    for h in range(self.num_heads):
+                        allowed.append(torch.gather(am_small, -1, abs_idx_hb[h].unsqueeze(1)).squeeze(1))
+                    allowed = torch.cat(allowed, dim=0)
+                    scores_sel = scores_sel.masked_fill(~allowed, -1e9)
+
+                attn_probs = F.softmax(scores_sel, dim=-1)
+                attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
+                out = torch.bmm(
+                    attn_probs.reshape(bh * tgt_len, 1, m),
+                    v_sel.reshape(bh * tgt_len, m, self.head_dim),
+                ).reshape(bh, tgt_len, self.head_dim)
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
             bsz, tgt_len, self.embed_dim
@@ -176,6 +192,7 @@ def patch_bart(
     stride_blocks: int | None = None,
     use_sink: bool = True,
     dense_layers: set[int] | list[int] | None = None,
+    use_triton: bool = True,
 ):
     """Replace encoder self-attention with HHST; keep listed layer indices dense (hybrid)."""
     if dense_layers is None:
@@ -201,6 +218,7 @@ def patch_bart(
                             local_blocks=local_blocks,
                             stride_blocks=stride_blocks,
                             use_sink=use_sink,
+                            use_triton=use_triton,
                         ),
                     )
                 layer_idx += 1
@@ -233,9 +251,11 @@ class PatchedModel(nn.Module):
         stride_blocks: int | None = None,
         use_sink: bool = True,
         dense_layers: set[int] | list[int] | None = None,
+        use_triton: bool = True,
     ):
         super().__init__()
         self.model = base_model
+        self.use_triton = use_triton
         if isinstance(dense_layers, list):
             dense_layers = set(dense_layers)
         patch_bart(
@@ -245,6 +265,7 @@ class PatchedModel(nn.Module):
             stride_blocks=stride_blocks,
             use_sink=use_sink,
             dense_layers=dense_layers,
+            use_triton=use_triton,
         )
         hidden_size = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
         self.attn_pool = AttnPool(hidden_size)

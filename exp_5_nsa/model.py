@@ -5,26 +5,18 @@ import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 from transformers.modeling_outputs import SequenceClassifierOutput
 
+from shared.kernels import (
+    build_gather_key_mask,
+    build_key_mask,
+    should_use_triton,
+    sliding_window_attention,
+    sparse_gather_attention,
+)
+
 try:
-    from .kernels import (
-        build_block_ok,
-        build_gather_key_mask,
-        build_key_mask,
-        compressed_causal_attention,
-        sliding_window_attention,
-        sparse_gather_attention,
-        triton_available,
-    )
+    from .kernels import build_block_ok, compressed_causal_attention
 except ImportError:
-    from kernels import (
-        build_block_ok,
-        build_gather_key_mask,
-        build_key_mask,
-        compressed_causal_attention,
-        sliding_window_attention,
-        sparse_gather_attention,
-        triton_available,
-    )
+    from kernels import build_block_ok, compressed_causal_attention
 
 
 class NSAAttention(BartAttention):
@@ -78,7 +70,7 @@ class NSAAttention(BartAttention):
             self.gate_mlp[-1].bias.copy_(torch.tensor([2.0, -2.0, -2.0]))
 
     def _use_triton_kernels(self, q: torch.Tensor) -> bool:
-        return self.use_triton and not self.training and q.is_cuda and triton_available()
+        return should_use_triton(self.use_triton, q, training=self.training)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()

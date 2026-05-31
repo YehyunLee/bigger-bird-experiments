@@ -1,11 +1,11 @@
-"""Compressed-block causal attention."""
+"""Compressed-block causal attention (NSA-specific)."""
 
 from __future__ import annotations
 
 import torch
 
-from .common import MODE_COMPRESSED, triton_available
-from .online_softmax import _launch
+from shared.kernels.common import MODE_COMPRESSED, triton_available
+from shared.kernels.online_softmax import _launch
 
 
 @torch.inference_mode()

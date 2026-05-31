@@ -5,3 +5,4 @@ accelerate>=0.28.0
 scikit-learn>=1.4.0
 matplotlib>=3.8.0
 pytest>=8.0.0
+# Optional for Triton fused attention (exp_5+): pip install triton; apt install python3-dev
