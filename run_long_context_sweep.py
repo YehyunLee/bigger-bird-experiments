@@ -44,7 +44,7 @@ def needs_cpu_for_seq(seq):
     return mps and not torch.cuda.is_available() and seq >= 2048
 
 
-def run_single(exp, seq, train_samples=500, eval_samples=100, grad_checkpoint=False, force_cpu=False):
+def run_single(exp, seq, train_samples=500, eval_samples=100, grad_checkpoint=False, force_cpu=False, save_weights=False):
     """Run one experiment and return results JSON path or None on failure."""
     cmd = [
         sys.executable, "run_experiment.py",
@@ -60,6 +60,8 @@ def run_single(exp, seq, train_samples=500, eval_samples=100, grad_checkpoint=Fa
     ]
     if grad_checkpoint:
         cmd.append("--grad-checkpoint")
+    if save_weights:
+        cmd.append("--save-weights")
     if force_cpu or needs_cpu_for_seq(seq):
         cmd.append("--cpu")
 
@@ -118,6 +120,8 @@ def main():
     parser.add_argument("--eval-samples", type=int, default=100)
     parser.add_argument("--grad-checkpoint", action="store_true",
                        help="Enable gradient checkpointing for baseline")
+    parser.add_argument("--save-weights", action="store_true",
+                       help="Save model weights to benchmarks/<exp>/weights_<timestamp>/ for later eval")
     parser.add_argument("--skip-baseline-oom", action="store_true",
                        help="If baseline OOMs, skip it and continue sparse runs")
     parser.add_argument("--cpu", action="store_true",
@@ -144,6 +148,7 @@ def main():
                 eval_samples=args.eval_samples,
                 grad_checkpoint=args.grad_checkpoint,
                 force_cpu=args.cpu,
+                save_weights=args.save_weights,
             )
             
             if res is None:

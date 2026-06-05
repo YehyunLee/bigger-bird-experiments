@@ -20,6 +20,12 @@ EXP_LABELS = {
     "exp_2_lightning_hybrid": "2 hybrid",
     "exp_3_dynamic_globals": "3 globals",
     "exp_4_pbs_attn": "4 pbs",
+    "exp_5_bigger_bird": "5 bigger bird",
+    "exp_6_deepseek_pbs": "6 deepseek pbs",
+    "exp_7_layer_adaptive": "7 layer adaptive",
+    "exp_8_token_drop": "8 token drop",
+    "exp_9_attn_specul": "9 attn specul",
+    "exp_10_gqa_sparse": "10 gqa sparse",
 }
 
 
