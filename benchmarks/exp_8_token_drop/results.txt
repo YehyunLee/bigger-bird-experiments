@@ -1,4 +1,4 @@
-Experiment: exp_8_token_drop | Date: 20260605_023820
-Training Time: 503.32s
-Accuracy: 0.86
-F1: 0.8510638297872339
+Experiment: exp_8_token_drop | Date: 20260605_063608
+Training Time: 1837.53s
+Accuracy: 0.8
+F1: 0.7916666666666665

@@ -14,6 +14,7 @@ exp_0_baseline:
   Samples=  500, Epochs=2, F1=0.866, Time=170.8s
   Samples=  500, Epochs=2, F1=0.871, Time=441.4s
   Samples=  500, Epochs=2, F1=0.917, Time=1484.9s
+  Samples=  500, Epochs=2, F1=0.840, Time=5485.6s
   Samples= 2000, Epochs=3, F1=0.905, Time=136.4s
   Samples= 6000, Epochs=3, F1=0.931, Time=216.7s
   Samples= 6000, Epochs=3, F1=0.930, Time=831.8s
@@ -53,6 +54,7 @@ exp_1_deepseek_topk:
   Samples=  500, Epochs=2, F1=0.837, Time=131.5s
   Samples=  500, Epochs=2, F1=0.600, Time=295.6s
   Samples=  500, Epochs=2, F1=0.812, Time=907.0s
+  Samples=  500, Epochs=2, F1=0.000, Time=3170.7s
   Samples= 2000, Epochs=3, F1=0.918, Time=208.8s
   Samples= 6000, Epochs=3, F1=0.926, Time=609.8s
   Samples= 6000, Epochs=3, F1=0.873, Time=678.1s
@@ -185,6 +187,7 @@ exp_7_layer_adaptive:
   Samples=  500, Epochs=2, F1=0.864, Time=124.6s
   Samples=  500, Epochs=2, F1=0.826, Time=298.1s
   Samples=  500, Epochs=2, F1=0.842, Time=911.5s
+  Samples=  500, Epochs=2, F1=0.778, Time=3178.2s
   Samples= 6000, Epochs=3, F1=0.901, Time=687.5s
   -> Scaling: 12.0x data → F1 Δ=+0.052
 
@@ -195,7 +198,8 @@ exp_8_token_drop:
   Samples=  500, Epochs=2, F1=0.808, Time=64.8s
   Samples=  500, Epochs=2, F1=0.837, Time=159.9s
   Samples=  500, Epochs=2, F1=0.851, Time=503.3s
-  -> Scaling: 1.0x data → F1 Δ=+0.565
+  Samples=  500, Epochs=2, F1=0.792, Time=1837.5s
+  -> Scaling: 1.0x data → F1 Δ=+0.506
 
 exp_9_attn_specul:
 ----------------------------------------
