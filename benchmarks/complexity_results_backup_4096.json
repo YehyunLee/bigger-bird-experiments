@@ -1,10 +1,9 @@
 {
   "metadata": {
-    "timestamp": "2026-06-05T01:05:40.154566",
+    "timestamp": "2026-06-05T00:34:41.495504",
     "device": "cuda",
-    "batch_size": "mixed (4 for 128-4096, 1 for 8192-32768)",
-    "trials": 10,
-    "note": "Ultra-long seqs (8192+) run with batch=1 to fit GPU memory"
+    "batch_size": 4,
+    "trials": 20
   },
   "results": [
     {
@@ -533,102 +532,6 @@
       "seq_length": 4096,
       "batch_size": 4,
       "time_ms": 6.925363159179687,
-      "oom": false
-    },
-    {
-      "exp_num": 0,
-      "exp_name": "exp_0_baseline",
-      "seq_length": 8192,
-      "batch_size": 1,
-      "time_ms": 26.262631225585938,
-      "oom": false
-    },
-    {
-      "exp_num": 0,
-      "exp_name": "exp_0_baseline",
-      "seq_length": 16384,
-      "batch_size": 1,
-      "time_ms": 95.414990234375,
-      "oom": false
-    },
-    {
-      "exp_num": 0,
-      "exp_name": "exp_0_baseline",
-      "seq_length": 32768,
-      "batch_size": 1,
-      "time_ms": null,
-      "oom": true
-    },
-    {
-      "exp_num": 1,
-      "exp_name": "exp_1",
-      "seq_length": 8192,
-      "batch_size": 1,
-      "time_ms": 2.9350912094116213,
-      "oom": false
-    },
-    {
-      "exp_num": 1,
-      "exp_name": "exp_1",
-      "seq_length": 16384,
-      "batch_size": 1,
-      "time_ms": 5.484748840332031,
-      "oom": false
-    },
-    {
-      "exp_num": 1,
-      "exp_name": "exp_1",
-      "seq_length": 32768,
-      "batch_size": 1,
-      "time_ms": 10.521804809570312,
-      "oom": false
-    },
-    {
-      "exp_num": 7,
-      "exp_name": "exp_7",
-      "seq_length": 8192,
-      "batch_size": 1,
-      "time_ms": 2.9529087066650392,
-      "oom": false
-    },
-    {
-      "exp_num": 7,
-      "exp_name": "exp_7",
-      "seq_length": 16384,
-      "batch_size": 1,
-      "time_ms": 5.463961410522461,
-      "oom": false
-    },
-    {
-      "exp_num": 7,
-      "exp_name": "exp_7",
-      "seq_length": 32768,
-      "batch_size": 1,
-      "time_ms": 10.50429458618164,
-      "oom": false
-    },
-    {
-      "exp_num": 10,
-      "exp_name": "exp_10",
-      "seq_length": 8192,
-      "batch_size": 1,
-      "time_ms": 3.0065664291381835,
-      "oom": false
-    },
-    {
-      "exp_num": 10,
-      "exp_name": "exp_10",
-      "seq_length": 16384,
-      "batch_size": 1,
-      "time_ms": 5.588991928100586,
-      "oom": false
-    },
-    {
-      "exp_num": 10,
-      "exp_name": "exp_10",
-      "seq_length": 32768,
-      "batch_size": 1,
-      "time_ms": 10.739199829101562,
       "oom": false
     }
   ]
