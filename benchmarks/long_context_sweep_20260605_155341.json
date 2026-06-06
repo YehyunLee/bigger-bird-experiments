@@ -39,30 +39,6 @@
       "exp_name": "exp_8_token_drop",
       "seq": 65536,
       "oom": true
-    },
-    {
-      "exp": 8,
-      "exp_name": "exp_8_token_drop",
-      "seq": 65536,
-      "accuracy": 0.78,
-      "f1": 0.78,
-      "train_time_s": 7112.3,
-      "peak_mem_mb": 5815.3,
-      "inference_ms": 1019.9,
-      "softmax_comparisons": 381906510156,
-      "oom": false
-    },
-    {
-      "exp": 8,
-      "exp_name": "exp_8_token_drop",
-      "seq": 65536,
-      "accuracy": 0.78,
-      "f1": 0.78,
-      "train_time_s": 7112.3,
-      "peak_mem_mb": 5815.3,
-      "inference_ms": 1019.9,
-      "softmax_comparisons": 381906510156,
-      "oom": false
     }
   ]
 }

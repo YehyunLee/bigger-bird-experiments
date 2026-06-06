@@ -199,7 +199,8 @@ exp_8_token_drop:
   Samples=  500, Epochs=2, F1=0.837, Time=159.9s
   Samples=  500, Epochs=2, F1=0.851, Time=503.3s
   Samples=  500, Epochs=2, F1=0.792, Time=1837.5s
-  -> Scaling: 1.0x data → F1 Δ=+0.506
+  Samples=  500, Epochs=2, F1=0.780, Time=7112.3s
+  -> Scaling: 1.0x data → F1 Δ=+0.494
 
 exp_9_attn_specul:
 ----------------------------------------
