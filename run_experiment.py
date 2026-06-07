@@ -6,6 +6,8 @@ Usage:
   python run_experiment.py --exp 3 --size medium   # Good GPU (8GB mem)  
   python run_experiment.py --exp 3 --size big      # Big GPU (24GB+ mem)
   python run_experiment.py --exp 3 --size big --epochs 5 --batch 4
+  python run_experiment.py --exp 5 --size big
+  python run_experiment.py --exp 6 --size small    
 """
 
 import sys
@@ -31,6 +33,8 @@ from exp_7_layer_adaptive.model import PatchedModel as LayerAdaptiveModel
 from exp_8_token_drop.model import PatchedModel as TokenDropModel
 from exp_9_attn_specul.model import PatchedModel as AttnSpeculModel
 from exp_10_gqa_sparse.model import PatchedModel as GQASparseModel
+from exp_11_nsa.model import PatchedModel as NSAModel
+from exp_12_s2_hhst.model import PatchedModel as S2HHSTModel
 
 # Compute presets
 COMPUTE_CONFIGS = {
@@ -116,6 +120,12 @@ EXPERIMENT_CONFIGS = {
     8: ("exp_8_token_drop", TokenDropModel, {"drop_after_layer": 3, "drop_ratio": 0.3}),
     9: ("exp_9_attn_specul", AttnSpeculModel, {"window_size": 64, "num_anchors": 4, "verify_every": 4, "verify_kl_weight": 0.1}),
     10: ("exp_10_gqa_sparse", GQASparseModel, {"kv_groups": 4, "top_k": 64, "low_rank_dim": 16}),
+    11: ("exp_11_nsa", NSAModel, {"block_size": 32, "stride": 32, "topk_blocks": 4, "window_size": 128, "use_triton": True}),
+    12: (
+        "exp_12_s2_hhst",
+        S2HHSTModel,
+        {"shard_size": 32, "local_blocks": 2, "stride_blocks": 16, "use_sink": True, "dense_layers": [0]},
+    ),
 }
 
 def main():
@@ -138,8 +148,8 @@ Examples:
         """
     )
     
-    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10],
-                       help="Experiment number (0=baseline, 1-4=original sparse methods, 5-10=new hybrid/advanced ideas)")
+    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10,11,12],
+                       help="Experiment number (0=baseline, 1-4=original sparse methods, 5-10=new hybrid/advanced ideas, 11=NSA, 12=S2-HHST)")
     parser.add_argument("--size", type=str, choices=["small", "medium", "big", "xl", "long"],
                        help="Compute size preset")
     parser.add_argument("--list", action="store_true",

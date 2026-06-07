@@ -21,6 +21,8 @@ python run_experiment.py --exp 7 --size small    # Layer-Adaptive Sparsity
 python run_experiment.py --exp 8 --size small    # Token Dropping
 python run_experiment.py --exp 9 --size small    # Attention Speculation
 python run_experiment.py --exp 10 --size small   # GQA + Sparse Routing
+python run_experiment.py --exp 11 --size small   # NSA (arXiv:2502.11089, Triton kernels)
+python run_experiment.py --exp 12 --size small   # S2-Attention / HHST (arXiv:2407.17678)
 ```
 **Config:** 500 samples, seq=256, batch=1, 2 epochs
 
@@ -31,6 +33,8 @@ python run_experiment.py --exp 1 --size medium
 python run_experiment.py --exp 2 --size medium
 python run_experiment.py --exp 3 --size medium
 python run_experiment.py --exp 4 --size medium
+python run_experiment.py --exp 5 --size medium
+python run_experiment.py --exp 6 --size medium
 ```
 **Config:** 2000 samples, seq=512, batch=2, accum=4, 3 epochs
 
@@ -41,6 +45,8 @@ python run_experiment.py --exp 1 --size big
 python run_experiment.py --exp 2 --size big
 python run_experiment.py --exp 3 --size big
 python run_experiment.py --exp 4 --size big
+python run_experiment.py --exp 5 --size big
+python run_experiment.py --exp 6 --size big
 ```
 **Config:** 6000 samples, seq=768, batch=4, accum=8, 3 epochs
 
@@ -96,16 +102,22 @@ python run_experiment.py --exp 3 --size small \
 | 9 | Attention Speculation | `window=64 + 4 anchors, KL distill every 4 layers` | Fast path + verifier distillation |
 | 10 | GQA + Sparse | `kv_groups=4, top_k=64` | Memory + softmax cost both reduced |
 
+### Triton-Kernel Experiments (exp 11-12)
+| Exp | Description | Key Params | Why |
+|---|---|---|---|
+| 11 | NSA (arXiv:2502.11089) | `block_size=32, stride=32, topk_blocks=4, window_size=128` | Compressed + selected + sliding-window branches with shared Triton kernels |
+| 12 | S2-Attention / HHST (arXiv:2407.17678) | `shard_size=32, local_blocks=2, stride_blocks=16, use_sink=True` | Sharded strided attention with sink tokens |
+
 Run ALL experiments (small smoke test):
 ```bash
-for exp in 0 1 2 3 4 5 6 7 8 9 10; do
+for exp in 0 1 2 3 4 5 6 7 8 9 10 11 12; do
   python run_experiment.py --exp $exp --size small
 done
 ```
 
 Run ALL new experiments at scale:
 ```bash
-for exp in 5 6 7 8 9 10; do
+for exp in 5 6 7 8 9 10 11 12; do
   python run_experiment.py --exp $exp --size big
 done
 ```
@@ -127,10 +139,15 @@ model = AutoModelForSequenceClassification.from_pretrained(weights_dir)
 tokenizer = AutoTokenizer.from_pretrained(weights_dir)
 # Re-apply patches if needed (exp_1-4 only):
 # from exp_1_deepseek_topk.model import patch_bart; patch_bart(model)
+# For exp 11: from exp_11_nsa.model import PatchedModel  # wrap base_model with NSA patches
 ```
 
 > **Note:** For patched experiments (exp 1–4) the *base* BART weights are saved (patches are
 > re-applied at load time). For the baseline (exp 0) the full model is saved as-is.
+>
+> **Exp 11 (NSA):** Same as other patches — use `PatchedModel` from `exp_11_nsa.model` after loading weights.
+>
+> **Exp 12 (S2-HHST):** S2-Attention / HHST (arXiv:2407.17678) — use `PatchedModel` from `exp_12_s2_hhst.model` after loading weights.
 
 ## Long-Context Stress Tests
 

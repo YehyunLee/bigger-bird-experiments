@@ -72,7 +72,7 @@ def _is_main_exp(name: str) -> bool:
         'exp_0_baseline', 'exp_1_deepseek_topk', 'exp_2_lightning_hybrid',
         'exp_3_dynamic_globals', 'exp_4_pbs_attn', 'exp_5_bigger_bird',
         'exp_6_deepseek_pbs', 'exp_7_layer_adaptive', 'exp_8_token_drop',
-        'exp_9_attn_specul', 'exp_10_gqa_sparse',
+        'exp_9_attn_specul', 'exp_10_gqa_sparse', 'exp_11_nsa', 'exp_12_s2_hhst',
     }
 
 
@@ -91,6 +91,8 @@ def plot_training_trajectories(runs: List[TrainingRun], save_dir: str):
         'exp_8_token_drop': '#7f7f7f',
         'exp_9_attn_specul': '#bcbd22',
         'exp_10_gqa_sparse': '#17becf',
+        'exp_11_nsa': '#1a9850',
+        'exp_12_s2_hhst': '#d73027',
     }
 
     # Filter to main experiments and keep latest run per (exp_name, train_samples)
