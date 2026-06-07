@@ -33,10 +33,10 @@ from exp_4_pbs_attn.model import PatchedModel as PBSModel
 
 EXPERIMENT_CONFIGS = {
     0: ("exp_0_baseline", None, {"attention": "full_dense"}),
-    1: ("exp_1_deepseek_topk", DeepSeekModel, {"top_k": 64, "low_rank_dim": 16}),
-    2: ("exp_2_lightning_hybrid", LightningModel, {"block_size": 128}),
-    3: ("exp_3_dynamic_globals", DynamicGlobalsModel, {"window_size": 64, "num_globals": 16}),
-    4: ("exp_4_pbs_attn", PBSModel, {"block_size": 64, "num_blocks": 2}),
+    1: ("exp_1_deepseek_topk", DeepSeekModel, {"top_k": 64, "low_rank_dim": 16, "use_triton": True}),
+    2: ("exp_2_lightning_hybrid", LightningModel, {"block_size": 128, "use_triton": True}),
+    3: ("exp_3_dynamic_globals", DynamicGlobalsModel, {"window_size": 64, "num_globals": 16, "use_triton": True}),
+    4: ("exp_4_pbs_attn", PBSModel, {"block_size": 64, "num_blocks": 2, "use_triton": True}),
 }
 
 

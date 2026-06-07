@@ -144,6 +144,44 @@ def head_shared_topk_indices(
     return idx
 
 
+def gather_attention_triton_or_none(
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    indices: torch.Tensor,
+    attention_mask,
+    bsz: int,
+    num_heads: int,
+    use_triton: bool,
+    training: bool,
+    scale: float = 1.0,
+) -> Optional[torch.Tensor]:
+    """Inference-only fused gather attention; returns None to signal PyTorch fallback.
+
+    ``indices`` may be head-shared ``[BH, M]`` (broadcast across queries) or
+    per-query ``[BH, T, M]``. Q is assumed pre-scaled, so ``scale`` defaults to 1.0.
+    """
+    from .kernels import (
+        build_gather_key_mask,
+        should_use_triton,
+        sparse_gather_attention,
+    )
+
+    if not should_use_triton(use_triton, Q, training=training):
+        return None
+    try:
+        tgt_len = Q.size(1)
+        token_idx = indices
+        if token_idx.dim() == 2:
+            token_idx = token_idx.unsqueeze(1).expand(-1, tgt_len, -1)
+        key_mask = build_gather_key_mask(
+            attention_mask, bsz, num_heads, tgt_len, token_idx
+        )
+        return sparse_gather_attention(Q, K, V, token_idx, key_mask, scale=scale)
+    except Exception:
+        return None
+
+
 def dense_self_attention(
     Q, K, V, attention_mask, bsz, num_heads, dropout, training
 ) -> torch.Tensor:

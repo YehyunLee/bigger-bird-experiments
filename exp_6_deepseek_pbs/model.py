@@ -6,6 +6,7 @@ from shared.patched_model import classification_forward
 from shared.sparse_attn_utils import (
     dense_self_attention,
     effective_top_k,
+    gather_attention_triton_or_none,
     head_shared_topk_indices,
     sparse_attention_head_shared,
     token_mask_1d,
@@ -27,6 +28,7 @@ class DeepSeekPBSAttention(BartAttention):
         low_rank_dim: int = 16,
         block_size: int = 32,
         num_blocks: int = 4,
+        use_triton: bool = True,
     ):
         super().__init__(
             embed_dim=base_attn.embed_dim,
@@ -43,6 +45,7 @@ class DeepSeekPBSAttention(BartAttention):
         self.low_rank_dim = low_rank_dim
         self.block_size = block_size
         self.num_blocks = num_blocks
+        self.use_triton = use_triton
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -113,9 +116,14 @@ class DeepSeekPBSAttention(BartAttention):
                 _, pick = torch.topk(rough_tok, k=k_eff, dim=-1)
                 top_idx = torch.gather(top_idx, 1, pick)
                 top_idx, _ = torch.sort(top_idx, dim=-1)
-            out = sparse_attention_head_shared(
-                Q, K, V, top_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+            out = gather_attention_triton_or_none(
+                Q, K, V, top_idx, attention_mask, bsz, self.num_heads,
+                self.use_triton, self.training,
             )
+            if out is None:
+                out = sparse_attention_head_shared(
+                    Q, K, V, top_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+                )
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
             bsz, tgt_len, self.embed_dim
@@ -138,15 +146,17 @@ def patch_bart(model: nn.Module, **kw):
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, top_k=64, low_rank_dim=16, block_size=32, num_blocks=4):
+    def __init__(self, base_model, top_k=64, low_rank_dim=16, block_size=32, num_blocks=4, use_triton=True):
         super().__init__()
         self.model = base_model
+        self.use_triton = use_triton
         patch_bart(
             self.model,
             top_k=top_k,
             low_rank_dim=low_rank_dim,
             block_size=block_size,
             num_blocks=num_blocks,
+            use_triton=use_triton,
         )
 
     def gradient_checkpointing_enable(self, **kwargs):

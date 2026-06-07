@@ -3,12 +3,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 
+from shared.kernels import should_use_triton
 from shared.patched_model import classification_forward
-from shared.sparse_attn_utils import dense_self_attention, token_mask_1d
+from shared.sparse_attn_utils import (
+    dense_self_attention,
+    gather_attention_triton_or_none,
+    token_mask_1d,
+)
 
 
 class DynamicGlobalAttention(BartAttention):
-    def __init__(self, base_attn: BartAttention, window_size: int = 64, num_globals: int = 16):
+    def __init__(self, base_attn: BartAttention, window_size: int = 64, num_globals: int = 16, use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -22,6 +27,7 @@ class DynamicGlobalAttention(BartAttention):
         self.out_proj.load_state_dict(base_attn.out_proj.state_dict())
         self.window_size = window_size
         self.num_globals = num_globals
+        self.use_triton = use_triton
         self.global_gate = nn.Linear(self.embed_dim, 1)
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
@@ -68,12 +74,33 @@ class DynamicGlobalAttention(BartAttention):
             g = min(self.num_globals, src_len)
             _, global_idx = torch.topk(global_scores, k=g, dim=-1)
             global_bh = global_idx.unsqueeze(1).expand(bsz, self.num_heads, g).reshape(BH, g)
+
+            half = self.window_size // 2
+            w = min(self.window_size, src_len)
+
+            # Inference fast path: merge globals + window into one gathered key set.
+            # exp_3's sparse branch divides scores by sqrt(d) on top of the pre-scaled
+            # Q, so pass scale=head_dim**-0.5 to stay equivalent to the PyTorch path.
+            if should_use_triton(self.use_triton, Q, training=self.training):
+                q_pos_k = torch.arange(tgt_len, device=Q.device).view(1, -1, 1)
+                col_off_k = torch.arange(w, device=Q.device).view(1, 1, -1) - half
+                win_pos_k = (q_pos_k + col_off_k).clamp(0, src_len - 1).expand(BH, -1, -1)
+                g_pos_k = global_bh.unsqueeze(1).expand(-1, tgt_len, -1)
+                token_idx = torch.cat([g_pos_k, win_pos_k], dim=-1)
+                out = gather_attention_triton_or_none(
+                    Q, K, V, token_idx, attention_mask, bsz, self.num_heads,
+                    self.use_triton, self.training, scale=self.head_dim ** -0.5,
+                )
+                if out is not None:
+                    attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
+                        bsz, tgt_len, self.embed_dim
+                    )
+                    return (self.out_proj(attn_output), None)
+
             bh = torch.arange(BH, device=Q.device).view(BH, 1)
             K_g = K[bh, global_bh, :]
             V_g = V[bh, global_bh, :]
 
-            half = self.window_size // 2
-            w = min(self.window_size, src_len)
             K_pad = F.pad(K, (0, 0, half, half))
             V_pad = F.pad(V, (0, 0, half, half))
             K_win = K_pad.unfold(1, w, 1)[:, :tgt_len].transpose(-1, -2)
@@ -106,13 +133,13 @@ class DynamicGlobalAttention(BartAttention):
         return (attn_output, None)
 
 
-def patch_bart(model: nn.Module, window_size: int = 64, num_globals: int = 16):
+def patch_bart(model: nn.Module, window_size: int = 64, num_globals: int = 16, use_triton: bool = True):
     def _recurse(module: nn.Module):
         for name, child in list(module.named_children()):
             if isinstance(child, BartAttention):
                 if getattr(child, "is_decoder", False):
                     continue
-                setattr(module, name, DynamicGlobalAttention(child, window_size, num_globals))
+                setattr(module, name, DynamicGlobalAttention(child, window_size, num_globals, use_triton=use_triton))
             else:
                 _recurse(child)
 
@@ -120,10 +147,11 @@ def patch_bart(model: nn.Module, window_size: int = 64, num_globals: int = 16):
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, window_size=64, num_globals=16):
+    def __init__(self, base_model, window_size=64, num_globals=16, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, window_size=window_size, num_globals=num_globals)
+        self.use_triton = use_triton
+        patch_bart(self.model, window_size=window_size, num_globals=num_globals, use_triton=use_triton)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):

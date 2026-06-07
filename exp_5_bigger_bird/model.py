@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 
 from shared.patched_model import classification_forward
+from shared.sparse_attn_utils import gather_attention_triton_or_none
 
 # Idea A: Unified Bigger Bird
 # Combines the THREE components from the original proposal in a SINGLE attention module:
@@ -20,7 +21,8 @@ class BiggerBirdAttention(BartAttention):
                  num_globals: int = 16,
                  num_teleports: int = 8,
                  diversity_lambda: float = 0.3,
-                 teleport_bias: float = 0.5):
+                 teleport_bias: float = 0.5,
+                 use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -39,6 +41,7 @@ class BiggerBirdAttention(BartAttention):
         self.num_teleports = num_teleports
         self.diversity_lambda = diversity_lambda
         self.teleport_bias = teleport_bias
+        self.use_triton = use_triton
 
         # Learned global importance gate (submodular surrogate)
         self.global_gate = nn.Linear(base_attn.embed_dim, 1)
@@ -159,31 +162,37 @@ class BiggerBirdAttention(BartAttention):
 
             # ---- Combine indices: M = k + G + T ----
             abs_idx = torch.cat([local_idx, g_idx_exp, teleport_idx], dim=-1)  # [BH, Tq, M]
-            M = abs_idx.size(-1)
 
-            # Gather K, V
-            idx_g = abs_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
-            K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
-            V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
+            out = gather_attention_triton_or_none(
+                Q, K, V, abs_idx, attention_mask, bsz, self.num_heads,
+                self.use_triton, self.training,
+            )
+            if out is None:
+                M = abs_idx.size(-1)
 
-            # Scores
-            scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2)  # [BH, Tq, M]
+                # Gather K, V
+                idx_g = abs_idx.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
+                K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
+                V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
 
-            # Mask gathered padding positions
-            if attention_mask is not None:
-                am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
-                if am_bool.dim() == 4: am_bool = am_bool[:, 0, 0, :]
-                # Expand to [BH, src_len] and gather along abs_idx
-                am_bh = am_bool.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, src_len)
-                allowed = torch.gather(am_bh.unsqueeze(1).expand(BH, tgt_len, src_len), 2, abs_idx)
-                scores_sel = scores_sel.masked_fill(~allowed, -1e9)
+                # Scores
+                scores_sel = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2)  # [BH, Tq, M]
 
-            attn_probs = F.softmax(scores_sel, dim=-1)
-            attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
-            out = torch.bmm(
-                attn_probs.reshape(BH * tgt_len, 1, M),
-                V_sel.reshape(BH * tgt_len, M, self.head_dim)
-            ).reshape(BH, tgt_len, self.head_dim)
+                # Mask gathered padding positions
+                if attention_mask is not None:
+                    am_bool = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
+                    if am_bool.dim() == 4: am_bool = am_bool[:, 0, 0, :]
+                    # Expand to [BH, src_len] and gather along abs_idx
+                    am_bh = am_bool.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, src_len)
+                    allowed = torch.gather(am_bh.unsqueeze(1).expand(BH, tgt_len, src_len), 2, abs_idx)
+                    scores_sel = scores_sel.masked_fill(~allowed, -1e9)
+
+                attn_probs = F.softmax(scores_sel, dim=-1)
+                attn_probs = F.dropout(attn_probs, p=self.dropout, training=self.training)
+                out = torch.bmm(
+                    attn_probs.reshape(BH * tgt_len, 1, M),
+                    V_sel.reshape(BH * tgt_len, M, self.head_dim)
+                ).reshape(BH, tgt_len, self.head_dim)
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim) \
                          .transpose(1, 2).reshape(bsz, tgt_len, self.embed_dim)
@@ -204,12 +213,14 @@ def patch_bart(model: nn.Module, **kw):
 
 class PatchedModel(nn.Module):
     def __init__(self, base_model, window_size=64, local_k=32, num_globals=16, num_teleports=8,
-                 diversity_lambda=0.3, teleport_bias=0.5):
+                 diversity_lambda=0.3, teleport_bias=0.5, use_triton=True):
         super().__init__()
         self.model = base_model
+        self.use_triton = use_triton
         patch_bart(self.model, window_size=window_size, local_k=local_k,
                    num_globals=num_globals, num_teleports=num_teleports,
-                   diversity_lambda=diversity_lambda, teleport_bias=teleport_bias)
+                   diversity_lambda=diversity_lambda, teleport_bias=teleport_bias,
+                   use_triton=use_triton)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):
