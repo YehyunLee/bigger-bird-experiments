@@ -1,4 +1,4 @@
-Experiment: exp_4_pbs_attn | Date: 20260531_100346
-Training Time: 208.43s
-Accuracy: 0.87
-F1: 0.8539325842696629
+Experiment: exp_4_pbs_attn | Date: 20260531_063715
+Training Time: 698.53s
+Accuracy: 0.488
+F1: 0.6559139784946236

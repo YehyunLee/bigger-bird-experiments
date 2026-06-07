@@ -10,7 +10,7 @@ class DataConfig:
     eval_samples: int = 1000
 
 def build_imdb_dataset(tokenizer, cfg: DataConfig, fixed_length: int = None):
-    ds = load_dataset("imdb")
+    ds = load_dataset("stanfordnlp/imdb")
     if cfg.train_samples:
         ds["train"] = ds["train"].shuffle(seed=cfg.seed).select(range(cfg.train_samples))
     if cfg.eval_samples:

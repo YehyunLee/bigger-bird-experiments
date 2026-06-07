@@ -91,8 +91,14 @@ def plot_scaling_trajectories(grouped_runs: Dict[str, List[ScalingRun]], save_di
         'exp_2_lightning_hybrid': '#ff7f0e', 
         'exp_3_dynamic_globals': '#2ca02c',
         'exp_4_pbs_attn': '#d62728',
-        'exp_5_nsa': '#9467bd',
-        'exp_6_s2_hhst': '#8c564b',
+        'exp_5_bigger_bird': '#9467bd',
+        'exp_6_deepseek_pbs': '#8c564b',
+        'exp_7_layer_adaptive': '#e377c2',
+        'exp_8_token_drop': '#7f7f7f',
+        'exp_9_attn_specul': '#bcbd22',
+        'exp_10_gqa_sparse': '#17becf',
+        'exp_11_nsa': '#1a9850',
+        'exp_12_s2_hhst': '#d73027',
     }
     
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))

@@ -1,4 +1,4 @@
-Experiment: exp_1_deepseek_topk | Date: 20260531_095328
-Training Time: 187.16s
-Accuracy: 0.92
-F1: 0.9166666666666666
+Experiment: exp_1_deepseek_topk | Date: 20260605_051026
+Training Time: 3170.74s
+Accuracy: 0.53
+F1: 0.0

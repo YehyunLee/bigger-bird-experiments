@@ -8,12 +8,23 @@ Standard sparse attention models, such as Big Bird and Longformer, utilize fixed
 
 ## Current Experimental Implementations
 
-The repository contains four distinct experimental approaches to sparse attention, each designed to optimize specific aspects of the attention mechanism:
+### Original Single-Idea Methods (exp 1-4)
 
-1.  **DeepSeek-Inspired Top-K Routing (exp_1_deepseek_topk)**: Implements a low-rank projection heuristic to approximate the DeepSeek Lightning Indexer. It projects queries and keys into a low-dimensional space to identify the most relevant tokens before performing high-precision attention on local subsets.
-2.  **Lightning Hybrid Attention (exp_2_lightning_hybrid)**: A dual-path approach that combines sharp local attention (standard Softmax) with an efficient linear attention feature map for long-range global context. This maintains local precision while ensuring linear scaling.
-3.  **Content-Aware Dynamic Globals (exp_3_dynamic_globals)**: Replaces static global tokens with a learned gating network. This network evaluates the "global importance" of every token in the sequence and dynamically selects the top candidates to facilitate global information broadcasting.
-4.  **Permuted Block-Sparse Attention (exp_4_pbs_attn)**: Optimizes for hardware efficiency by calculating affinity at the block level. Tokens are processed in contiguous chunks to maximize GPU memory coalescing and minimize the overhead of random memory access.
+> **Implementation note (May 2026):** Exp 1–4 kernels were refactored for efficient PyTorch (head-shared routing, no full `T×T` score tensors, BART first-token pooling). See [context/exp-1-4-fixes-may2026.md](context/exp-1-4-fixes-may2026.md) for why older benchmarks looked bad and what changed. Use `--fixed-length` for long-context tests (dynamic padding often yields ~150–200 tokens on IMDb).
+
+1.  **DeepSeek-Inspired Top-K Routing (exp_1_deepseek_topk)**: Low-rank Lightning Indexer–style routing (`d_low=16`), then full-dim softmax on **K=64 keys per head** (shared across query positions for speed). Defaults: `top_k=64`, `low_rank_dim=16`.
+2.  **Lightning Hybrid Attention (exp_2_lightning_hybrid)**: Sliding-window softmax via `unfold` (no full `QK^T` matrix) plus optional linear attention when `T > 4 × block_size`. Default `block_size=128`.
+3.  **Content-Aware Dynamic Globals (exp_3_dynamic_globals)**: Learned gate picks **G=16 global tokens per batch**; local context via sliding window (`W=64`); single softmax over **G + W** keys. Defaults: `window_size=64`, `num_globals=16`.
+4.  **Permuted Block-Sparse Attention (exp_4_pbs_attn)**: Head-shared block routing, **sorted** token indices for coalesced GPU reads, sparse softmax on **M×block_size** tokens. Defaults: `block_size=64`, `num_blocks=2` (128 keys).
+
+### Advanced Hybrid / Diverging Ideas (exp 5-10)
+
+5.  **Bigger Bird — Unified (exp_5_bigger_bird)**: Reimplements the **original proposal**: three components combined in a single attention module — (i) diversity-aware local top-k via MMR-lite, (ii) submodular-style global token selection via learned gate, (iii) biased random "teleports" mixing high-gate candidates with uniform random. Selects only `local_k + globals + teleports` keys per query.
+6.  **DeepSeek + PBS Hybrid (exp_6_deepseek_pbs)**: Combines content-aware routing with GPU-friendly block coalescing. Low-rank Q/K projections identify the top-M most-relevant blocks (PBS-style), then top-K tokens are selected *within* those blocks. Selected indices are sorted to guarantee contiguous memory reads.
+7.  **Layer-Adaptive Sparsity (exp_7_layer_adaptive)**: Different layers do different work — early layers extract local syntax (need more context), middle layers compose semantics, late layers do high-level reasoning. This experiment uses a per-layer top-k schedule: dense at the bottom (`k_early=192`), moderate in the middle (`k_mid=64`), aggressive at the top (`k_late=32`).
+8.  **Token Dropping (exp_8_token_drop)**: Diverges from sparse attention entirely. After 3 dense layers extract local features, computes token importance (L2 norm of hidden state) and **drops the bottom 30%**. Subsequent layers process a shorter sequence — attention cost drops quadratically with `keep_ratio²`.
+9.  **Attention Speculation (exp_9_attn_specul)**: Inspired by speculative decoding. Every layer runs a *fast path* (window + first/middle/last anchors). Every 4th layer also computes the *full* attention as a verifier and adds a KL distillation loss, teaching the fast path to mimic full attention during training. At inference, only the fast path runs.
+10. **GQA + Sparse Routing (exp_10_gqa_sparse)**: Stacks two memory wins from the DeepSeek-V3 playbook. (a) Grouped-Query Attention compresses 12 K/V heads into 4 KV groups via mean pooling — 3× memory reduction. (b) Top-K sparse routing on top — softmax cost drops from O(N) to O(K) per query.
 
 ## Architecture Diagrams
 
@@ -47,7 +58,8 @@ Input Tokens (N=768)
        ▼
 ┌─────────────────────────────────────────────────────┐
 │  Classification Head                                │
-│  └─► Attention Pooling ──► Linear ──► Softmax     │
+│  └─► Pool position 0 ──► Linear ──► Softmax       │
+│      (HF BART style; exp 1–4 via shared/patched)   │
 └─────────────────────────────────────────────────────┘
        │
        ▼
@@ -58,79 +70,70 @@ Input Tokens (N=768)
 
 ### Experiment 1: DeepSeek-Inspired Top-K Routing
 
-**Key Innovation**: Low-rank projection to approximate token importance before full attention.
+**Key Innovation**: Low-rank routing to pick a small key set, then full-dim attention on those keys only.
 
-> **Analogy:** Before reading a book carefully, you skim the chapter titles and first sentences to figure out which chapters are actually relevant to your question. This experiment does the same — it runs a fast, blurry scan of all tokens to find the top K most promising ones, then reads only those in full detail. The "blurry scan" is cheap because it uses a compressed (low-rank) version of the token representations.
+> **Analogy:** Skim chapter titles (cheap low-rank scores), pick the top chapters once per reading head, then read those chapters in full detail for every sentence in the book.
 
 ```
 Input ──► Q, K, V projections
               │
               ▼
+    ┌─────────────────────────────┐
+    │ Head-shared low-rank routing  │  ◄── O(n × d_low), not O(n²)
+    │ Q̄_low = mean_t Q_low per head │
+    │ scores = Q̄_low × K_low^T     │
+    │ topk → [BH, K] (same K keys   │
+    │         for all query pos.)   │
+    └─────────────────────────────┘
+              │
+              ▼
     ┌─────────────────────┐
-    │ Low-Rank Routing    │  ◄── O(n² × d_low) where d_low << d
-    │ Q_low, K_low (d=16) │
+    │ Gather K, V         │  ◄── K_eff = min(top_k, max(32, n/8))
+    │ (no T×T expand)       │      default top_k=64
     └─────────────────────┘
               │
               ▼
     ┌─────────────────────┐
-    │ Rough Scores      │  ──► Top-K Selection (K=128)
-    │ Q_low × K_low^T   │
-    └─────────────────────┘
-              │
-              ▼
-    ┌─────────────────────┐
-    │ Gather K, V for     │  ◄── Only K tokens selected
-    │ selected indices    │
-    └─────────────────────┘
-              │
-              ▼
-    ┌─────────────────────┐
-    │ Precise Attention   │  ──► Full-dim softmax over K tokens
-    │ softmax(Q × K^T)V   │      O(n × K × d)
+    │ Precise Attention   │  ──► softmax(Q × K_sel^T) V
+    │ O(n × K × d)        │
     └─────────────────────┘
 ```
 
-**Complexity**: O(n² × d_low + n × K × d) ≈ O(n) when K << n
+**Complexity**: O(n × d_low + n × K × d) ≈ O(n) when K ≪ n. Short sequences fall back to dense attention.
 
 ---
 
 ### Experiment 2: Lightning Hybrid Attention
 
-**Key Innovation**: Dual-path — local precision (softmax) + global efficiency (linear).
+**Key Innovation**: Band-local softmax (window only) + optional linear global path on long sequences.
 
-> **Analogy:** Think of how you read a newspaper. You read each article closely word-by-word (local precision), but you also glance at the full front page to get the big picture (global context). This experiment does both at the same time — sharp softmax attention for nearby tokens, and a cheap running-sum trick for distant context — then blends the two outputs together.
+> **Analogy:** Read the newspaper closely in a sliding window around each paragraph; on long pages, also keep a running “front page summary” via linear attention and add it in.
 
 ```
 Input ──► Q, K, V
               │
-    ┌─────────┴─────────┐
-    │                   │
-    ▼                   ▼
-┌──────────┐     ┌──────────────┐
-│ Local    │     │ Global       │
-│ Window   │     │ Linear       │
-│ (Softmax)│     │ Attention    │
-│          │     │              │
-│ Window:  │     │ Q' = elu(Q)+1│
-│ |i-j| ≤  │     │ K' = elu(K)+1│
-│ block/2  │     │              │
-│          │     │ Output =     │
-│ O(n×W)   │     │ Q'(K'^T×V)   │
-│          │     │ ─────────────│
-│          │     │  (K'^T×1)    │
-│          │     │ O(n×d²)      │
-└────┬─────┘     └──────┬───────┘
-     │                  │
-     └────────┬─────────┘
+              ▼
+    ┌─────────────────────────────┐
+    │ Local: unfold window W      │  ◄── scores [BH, T, W] only
+    │ |i-j| ≤ block_size/2       │      no full T×T matrix
+    │ softmax → local_out         │      O(n × W × d)
+    └─────────────────────────────┘
+              │
+              ▼ (if T > 4 × block_size)
+    ┌─────────────────────────────┐
+    │ Global: linear attention    │
+    │ Q' = elu(Q)+1, K' = elu(K)+1│
+    │ out = Q'(K'^T V) / norm     │      O(n × d²)
+    └─────────────────────────────┘
+              │
               ▼
     ┌─────────────────────┐
-    │ Combined Output     │
-    │ local_out + 0.5 ×  │  ◄── Tunable mixing coefficient
+    │ local_out + 0.5 ×   │  (linear path skipped on short T)
     │ global_out          │
     └─────────────────────┘
 ```
 
-**Complexity**: O(n×W + n×d²) = O(n) where W = window size
+**Complexity**: O(n×W + n×d²) when linear path is on; O(n×W) only on short sequences. Default `block_size=128`.
 
 ---
 
@@ -163,26 +166,20 @@ Input ──► hidden_states
               │
               ▼
     ┌─────────────────────────────────┐
-    │ Attention Window Construction │
-    │                                 │
-    │  ┌─────────┐   ┌───────────┐  │
-    │  │ Global  │ + │  Local    │  │  ◄── G globals + W=64 window
-    │  │ (G tok) │   │ (W tok)   │  │
-    │  │ broadcast│   │ sliding   │  │
-    │  │ to all  │   │ per token │  │
-    │  └─────────┘   └───────────┘  │
-    │                                 │
-    │  Total attended tokens: G + W │
+    │ Top-G globals [B, G]          │  ◄── once per batch (shared by
+    │ + sliding window via unfold   │      all query positions)
+    │ K_g, K_win → concat scores    │
+    │ softmax over G+W keys         │
     └─────────────────────────────────┘
               │
               ▼
     ┌─────────────────────┐
-    │ Sparse Attention      │  ──► Softmax over (G+W) tokens per query
-    │ O(n × (G+W) × d)      │      = O(n) when G,W constant
+    │ Output              │  ──► einsum over V_g and V_win
+    │ O(n × (G+W) × d)    │
     └─────────────────────┘
 ```
 
-**Complexity**: O(n × (G + W) × d) = O(n)
+**Complexity**: O(n × (G + W) × d) = O(n) when G, W are constant (defaults G=16, W=64).
 
 ---
 
@@ -197,50 +194,32 @@ Input ──► Q, K, V [shape: BH, T, d]
               │
               ▼
     ┌─────────────────────┐
-    │ Block Pooling       │  ◄── Average pool to block representations
-    │ block_size = 32     │
-    │                     │
-    │ Q: [BH, T, d]       │
-    │   ↓                 │
-    │ Q_blocks: [BH,       │
-    │   n_blocks, d]       │
+    │ Block Pooling       │  ◄── mean-pool Q/K into blocks
+    │ block_size = 64     │      (default in run_experiment.py)
     └─────────────────────┘
               │
               ▼
     ┌─────────────────────┐
-    │ Block Affinity      │  ──► Block-to-block similarity scores
-    │ Q_blocks × K_blocks^T│     [BH, n_q_blocks, n_k_blocks]
+    │ Head-shared routing │  ──► q_pool = mean(Q_blocks)
+    │ top-M blocks [BH,M] │      M = num_blocks (default 2)
     └─────────────────────┘
               │
               ▼
     ┌─────────────────────┐
-    │ Top-M Block Select  │  ──► Select M=4 most relevant blocks
-    │ torch.topk(scores,M)│
+    │ Expand + sort idx   │  ──► M×64 token indices, sorted
+    │ for coalesced read  │      for GPU locality
     └─────────────────────┘
               │
               ▼
     ┌─────────────────────┐
-    │ Token Index Expand  │  ──► Convert block indices → token indices
-    │ Block i → tokens    │      [i×B : (i+1)×B]
-    │ [i×32 : (i+1)×32]   │
-    └─────────────────────┘
-              │
-              ▼
-    ┌─────────────────────┐
-    │ Contiguous Gather   │  ◄── GPU-friendly: coalesced memory reads
-    │ torch.gather()      │      M blocks × 32 tokens = 128 tokens
-    └─────────────────────┘
-              │
-              ▼
-    ┌─────────────────────┐
-    │ Attention           │  ──► O(n × M × block_size × d)
-    │ O(n × 128 × d)      │      = O(n)
+    │ Sparse Attention    │  ──► head-shared softmax on 128 keys
+    │ O(n × M × B × d)    │
     └─────────────────────┘
 ```
 
-**Complexity**: O(n × M × B × d) = O(n) where M = num_blocks, B = block_size
+**Complexity**: O(n_blocks × B + n × M × B × d) ≈ O(n) for fixed M, B. `M` scales with sequence length via `_effective_num_blocks`.
 
-**Hardware Benefit**: Contiguous memory access patterns maximize GPU bandwidth.
+**Hardware Benefit**: Sorted indices + block-aligned gathers improve memory coalescing vs random per-token sparsity.
 
 ---
 
@@ -249,8 +228,11 @@ Input ──► Q, K, V [shape: BH, T, d]
 The project is organized to facilitate fair and consistent benchmarking across different architectures:
 
 *   **shared/**: Contains standardized utility modules used by all experiments.
-    *   `dataset.py`: Uniform IMDb dataset loading and preprocessing logic.
-    *   `runner.py`: A standardized training and evaluation wrapper using the Hugging Face Trainer API.
+    *   `dataset.py`: IMDb loading (`stanfordnlp/imdb`); supports dynamic padding or `fixed_length` padding.
+    *   `runner.py`: Hugging Face `Trainer` wrapper; logs F1, memory, latency, `seq_stats_train`, `fixed_length`.
+    *   `patched_model.py`: BART first-token pooling + `classification_forward` for fair exp 1–4 eval.
+    *   `sparse_attn_utils.py`: Head-shared top-k, efficient gathers, dense fallback helpers.
+*   **context/**: Meeting notes and [exp-1-4-fixes-may2026.md](context/exp-1-4-fixes-may2026.md) (benchmark postmortem + fix changelog).
 *   **exp_*/**: Individual implementation folders for each experimental architecture, containing specific model definitions and execution scripts.
 *   **benchmarks/**: Automated output directory for tracking performance metrics (F1 score), training latency, and memory utilization.
 
@@ -274,27 +256,56 @@ pip install -r requirements.txt
 
 To execute the experiments, ensure that the environment requirements (PyTorch, Transformers, Accelerate) are met.
 
-### Running a specific experiment
-Navigate to an experiment directory and execute the run script:
+### Running experiments (recommended)
+
+Use the unified runner and presets in [COMMANDS.md](COMMANDS.md):
+
 ```bash
-python exp_1_deepseek_topk/run.py
+python run_experiment.py --list
+python run_experiment.py --exp 1 --size small              # quick smoke
+python run_experiment.py --exp 1 --size big --fixed-length --seq 1024   # long-context
 ```
 
-### Running all experiments sequentially
-To perform a complete sweep of all implementations:
+Legacy per-folder scripts (`exp_*/run.py`) still exist but may use older defaults.
+
+**Padding:** Without `--fixed-length`, IMDb batches are padded to the longest sequence in the batch (~150–200 tokens typical), not necessarily `max_length`. For long-context experiments, always pass `--fixed-length` (and consider `--grad-checkpoint` for baseline at 2048+).
+
+## Efficiency & Complexity Benchmarks
+
+Beyond accuracy, every training run now automatically captures:
+- **Peak memory** (MB)
+- **Inference latency** (ms/sequence)
+- **Softmax comparison count** (vs full dense baseline) — counts softmax *keys* only; use `complexity_verify.py` for wall-clock attention time
+
+### Long-Context Scaling Test
+Test how each method handles longer sequences with the **same compute budget**:
 ```bash
-python exp_1_deepseek_topk/run.py && \
-python exp_2_lightning_hybrid/run.py && \
-python exp_3_dynamic_globals/run.py && \
-python exp_4_pbs_attn/run.py
+python benchmarks/efficiency_eval.py --exp 0,1,2,3,4 --seq 256,512,1024,2048
+```
+This fixes samples=500, epochs=2 and varies sequence length. Results are saved to `benchmarks/efficiency_results.json`.
+
+Visualize with:
+```bash
+python viz/efficiency_viz.py
 ```
 
-The current micro-benchmark configuration is set to train on 200 samples with a sequence length of 256 for rapid iteration and validation of the routing logic.
+### Empirical Complexity Verification
+Micro-benchmark the attention forward pass to verify O(n) vs O(n²):
+```bash
+python benchmarks/complexity_verify.py --exp 0,1,2,3,4 --seq 128,256,512,1024,2048
+```
+Output includes log-log slope per experiment (slope ≈ 1 means O(n), ≈ 2 means O(n²)).
+
+### Compare Experiments
+After running experiments, compare across all metrics:
+```bash
+python viz/compare_experiments.py
+```
 
 ## Technical Stack
 
 *   **Frameworks**: Python, PyTorch, Hugging Face Transformers, Accelerate.
-*   **Evaluation Metrics**: F1 score (primary), training throughput (steps/sec), and memory footprint.
+*   **Evaluation Metrics**: F1 score (primary), training throughput (steps/sec), memory footprint, inference latency, and softmax comparison reduction.
 *   **Baseline**: Experiments are currently validated against the facebook/bart-base architecture as a comparative patch.
 
 ## Team
