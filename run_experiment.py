@@ -117,7 +117,7 @@ EXPERIMENT_CONFIGS = {
     5: ("exp_5_bigger_bird", BiggerBirdModel, {"window_size": 64, "local_k": 32, "num_globals": 16, "num_teleports": 8, "diversity_lambda": 0.3, "teleport_bias": 0.5, "use_triton": True}),
     6: ("exp_6_deepseek_pbs", DeepSeekPBSModel, {"top_k": 64, "low_rank_dim": 16, "block_size": 32, "num_blocks": 4, "use_triton": True}),
     7: ("exp_7_layer_adaptive", LayerAdaptiveModel, {"k_early": 192, "k_mid": 64, "k_late": 32, "low_rank_dim": 16, "use_triton": True}),
-    8: ("exp_8_token_drop", TokenDropModel, {"drop_after_layer": 3, "drop_ratio": 0.3}),
+    8: ("exp_8_token_drop", TokenDropModel, {"drop_after_layer": 3, "drop_ratio": 0.3, "use_triton": True}),
     9: ("exp_9_attn_specul", AttnSpeculModel, {"window_size": 64, "num_anchors": 4, "verify_every": 4, "verify_kl_weight": 0.1, "use_triton": True}),
     10: ("exp_10_gqa_sparse", GQASparseModel, {"kv_groups": 4, "top_k": 64, "low_rank_dim": 16, "use_triton": True}),
     11: ("exp_11_nsa", NSAModel, {"block_size": 32, "stride": 32, "topk_blocks": 4, "window_size": 128, "use_triton": True}),

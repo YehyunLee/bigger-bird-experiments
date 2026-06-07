@@ -6,7 +6,7 @@ from transformers.models.bart.modeling_bart import BartAttention
 from shared.patched_model import classification_forward
 from shared.sparse_attn_utils import (
     dense_self_attention,
-    gather_attention_triton_or_none,
+    sdpa_head_shared_or_none,
     sparse_attention_head_shared,
     token_mask_1d,
 )
@@ -91,7 +91,7 @@ class PBSAttention(BartAttention):
             top_idx = (base.unsqueeze(-1) + offs.view(1, 1, -1)).reshape(BH, M * self.block_size)
             top_idx, _ = torch.sort(top_idx, dim=-1)
 
-            out = gather_attention_triton_or_none(
+            out = sdpa_head_shared_or_none(
                 Q, K, V, top_idx, attention_mask, bsz, self.num_heads,
                 self.use_triton, self.training,
             )

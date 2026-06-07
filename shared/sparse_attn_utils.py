@@ -182,6 +182,64 @@ def gather_attention_triton_or_none(
         return None
 
 
+def sdpa_head_shared_or_none(
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    indices: torch.Tensor,
+    attention_mask,
+    bsz: int,
+    num_heads: int,
+    enabled: bool,
+    training: bool,
+) -> Optional[torch.Tensor]:
+    """Fused attention over a head-shared key set via F.scaled_dot_product_attention.
+
+    ``indices`` is ``[BH, k]`` (one key set per head, shared across queries). Q is
+    pre-scaled, so ``scale=1.0``. Inference-only; returns None to fall back.
+    """
+    if not enabled or training:
+        return None
+    BH, _, d = Q.shape
+    idx = indices.unsqueeze(-1).expand(-1, -1, d)
+    K_sel = torch.gather(K, 1, idx)
+    V_sel = torch.gather(V, 1, idx)
+    attn_mask = None
+    token_mask = token_mask_1d(attention_mask, bsz, K.size(1), Q.device)
+    if token_mask is not None:
+        src_len = token_mask.size(-1)
+        am = token_mask.unsqueeze(1).expand(bsz, num_heads, src_len).reshape(BH, src_len)
+        allowed = torch.gather(am, 1, indices)  # [BH, k] bool
+        attn_mask = allowed.unsqueeze(1)  # [BH, 1, k], broadcast over queries
+    return F.scaled_dot_product_attention(Q, K_sel, V_sel, attn_mask=attn_mask, scale=1.0)
+
+
+def sdpa_dense_or_none(
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    attention_mask,
+    bsz: int,
+    num_heads: int,
+    enabled: bool,
+    training: bool,
+) -> Optional[torch.Tensor]:
+    """Fused full attention via F.scaled_dot_product_attention (Flash/mem-efficient).
+
+    Q is pre-scaled, so ``scale=1.0``. Inference-only; returns None to fall back.
+    """
+    if not enabled or training:
+        return None
+    BH = Q.size(0)
+    src_len = K.size(1)
+    attn_mask = None
+    token_mask = token_mask_1d(attention_mask, bsz, src_len, Q.device)
+    if token_mask is not None:
+        am = token_mask.unsqueeze(1).expand(bsz, num_heads, src_len).reshape(BH, src_len)
+        attn_mask = am.unsqueeze(1)  # [BH, 1, src_len], broadcast over queries
+    return F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask, scale=1.0)
+
+
 def dense_self_attention(
     Q, K, V, attention_mask, bsz, num_heads, dropout, training
 ) -> torch.Tensor:

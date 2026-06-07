@@ -6,8 +6,8 @@ from shared.patched_model import classification_forward
 from shared.sparse_attn_utils import (
     dense_self_attention,
     effective_top_k,
-    gather_attention_triton_or_none,
     head_shared_topk_indices,
+    sdpa_head_shared_or_none,
     sparse_attention_head_shared,
     token_mask_1d,
 )
@@ -84,7 +84,7 @@ class LayerAdaptiveAttention(BartAttention):
             topk_idx = head_shared_topk_indices(
                 Q_low, K_low, k_eff, token_mask, bsz, self.num_heads
             )
-            out = gather_attention_triton_or_none(
+            out = sdpa_head_shared_or_none(
                 Q, K, V, topk_idx, attention_mask, bsz, self.num_heads,
                 self.use_triton, self.training,
             )
