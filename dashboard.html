@@ -65,6 +65,7 @@
   <div class="tab" onclick="switchTab('complexity')">Complexity</div>
   <div class="tab" onclick="switchTab('efficiency')">Efficiency</div>
   <div class="tab" onclick="switchTab('table')">All Runs</div>
+  <div class="tab" onclick="switchTab('radar')">Radar</div>
   <div class="tab" onclick="switchTab('context')">Project Context</div>
 </div>
 
@@ -170,6 +171,47 @@
       </thead>
       <tbody id="runs-tbody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- RADAR -->
+<div id="page-radar" class="page">
+  <div class="controls">
+    <label>Sequence Length:</label>
+    <select id="radar-seq" onchange="renderRadar()">
+      <option value="1024">1024</option>
+      <option value="2048">2048</option>
+      <option value="4096">4096</option>
+    </select>
+    <span style="color:var(--muted);font-size:12px;margin-left:8px">Toggle experiments:</span>
+    <div id="radar-checkboxes" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+    <div class="card" style="grid-column:1/-1">
+      <h3>Multi-Factor Radar — All Experiments</h3>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:14px">All axes normalized 0–1 (higher = better). Inverted for latency, memory, train time, and softmax comparisons. OOM runs scored 0.</p>
+      <div style="max-width:680px;margin:0 auto">
+        <canvas id="c-radar" style="max-height:500px"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Overall Score (area under radar)</h3>
+      <canvas id="c-radar-score" style="max-height:300px"></canvas>
+    </div>
+    <div class="card">
+      <h3>Axis Definitions</h3>
+      <table style="margin-top:8px">
+        <thead><tr><th>Axis</th><th>Metric</th><th>Direction</th></tr></thead>
+        <tbody>
+          <tr><td>F1</td><td>F1 score on IMDb</td><td style="color:#4ade80">↑ higher better</td></tr>
+          <tr><td>Accuracy</td><td>Classification accuracy</td><td style="color:#4ade80">↑ higher better</td></tr>
+          <tr><td>Speed</td><td>1 / inference latency</td><td style="color:#4ade80">↑ faster better</td></tr>
+          <tr><td>Memory</td><td>1 / peak memory MB</td><td style="color:#4ade80">↑ less mem better</td></tr>
+          <tr><td>Train Eff.</td><td>1 / train time (s)</td><td style="color:#4ade80">↑ faster better</td></tr>
+          <tr><td>Sparsity</td><td>1 / softmax comparisons</td><td style="color:#4ade80">↑ more sparse better</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -418,6 +460,110 @@ function renderEfficiency(){
   barChart('e-mem2','peak_memory_mb','Memory (MB)');
 }
 
+// ── RADAR ─────────────────────────────────────────────────────────────
+const radarActiveExps = new Set([0,1,7,8,9,10]);
+
+function buildRadarCheckboxes(){
+  const c=document.getElementById('radar-checkboxes');
+  for(let e=0;e<=10;e++){
+    const lbl=document.createElement('label');
+    lbl.style.cssText='display:flex;align-items:center;gap:4px;cursor:pointer;font-size:12px;';
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=radarActiveExps.has(e);
+    cb.style.accentColor=COLORS[e];
+    cb.onchange=()=>{ if(cb.checked) radarActiveExps.add(e); else radarActiveExps.delete(e); renderRadar(); };
+    const dot=document.createElement('span');
+    dot.style.cssText=`width:9px;height:9px;border-radius:50%;background:${COLORS[e]};display:inline-block;`;
+    lbl.appendChild(cb); lbl.appendChild(dot);
+    lbl.appendChild(document.createTextNode(' '+EXP_NAMES[e]));
+    c.appendChild(lbl);
+  }
+}
+
+function renderRadar(){
+  const seq=parseInt(document.getElementById('radar-seq').value);
+  const rows=EFFICIENCY.filter(d=>d.seq_length===seq).sort((a,b)=>a.exp_num-b.exp_num);
+
+  // raw values per axis (higher raw = better after inversion)
+  const axes=['F1','Accuracy','Speed','Memory','Train Eff.','Sparsity'];
+  const raw = rows.map(d=>({
+    exp_num: d.exp_num,
+    F1:           d.oom||d.f1==null        ? 0 : d.f1,
+    Accuracy:     d.oom||d.accuracy==null   ? 0 : d.accuracy,
+    Speed:        d.oom||!d.inference_latency_ms ? 0 : 1/d.inference_latency_ms,
+    Memory:       d.oom||!d.peak_memory_mb       ? 0 : 1/d.peak_memory_mb,
+    'Train Eff.': d.oom||!d.train_time_s         ? 0 : 1/d.train_time_s,
+    Sparsity:     d.oom||!d.softmax_comparisons   ? 0 : 1/d.softmax_comparisons
+  }));
+
+  // normalize each axis to [0,1]
+  const norm = {};
+  axes.forEach(ax=>{
+    const vals=raw.map(r=>r[ax]);
+    const mn=Math.min(...vals), mx=Math.max(...vals);
+    norm[ax]=raw.map(r=> mx===mn ? (r[ax]>0?1:0) : (r[ax]-mn)/(mx-mn));
+  });
+
+  const selected=[...radarActiveExps];
+  const datasets = selected.map(e=>{
+    const idx=rows.findIndex(r=>r.exp_num===e);
+    if(idx<0) return null;
+    return {
+      label: EXP_NAMES[e],
+      data: axes.map(ax=>idx>=0 ? +(norm[ax][idx]*100).toFixed(1) : 0),
+      borderColor: COLORS[e],
+      backgroundColor: COLORS[e]+'33',
+      borderWidth: 2,
+      pointBackgroundColor: COLORS[e],
+      pointRadius: 4
+    };
+  }).filter(Boolean);
+
+  mkChart('c-radar',{
+    type:'radar',
+    data:{ labels:axes, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:true,
+      plugins:{ legend:{ labels:{ color:'#e2e8f0', font:{size:11}, boxWidth:12 }, position:'bottom' } },
+      scales:{ r:{
+        min:0, max:100,
+        grid:{ color:'rgba(255,255,255,0.08)' },
+        angleLines:{ color:'rgba(255,255,255,0.12)' },
+        pointLabels:{ color:'#e2e8f0', font:{size:13,weight:'600'} },
+        ticks:{ color:'#8892a4', font:{size:10}, stepSize:25, backdropColor:'transparent' }
+      }}
+    }
+  });
+
+  // overall score = mean of normalized axes per experiment
+  const scoreData = rows.map(r=>{
+    const idx=rows.indexOf(r);
+    const avg=axes.reduce((s,ax)=>s+norm[ax][idx],0)/axes.length;
+    return { exp_num:r.exp_num, score: +(avg*100).toFixed(1) };
+  }).sort((a,b)=>b.score-a.score);
+
+  mkChart('c-radar-score',{
+    type:'bar',
+    data:{
+      labels: scoreData.map(d=>EXP_NAMES[d.exp_num]),
+      datasets:[{ label:'Overall Score',
+        data: scoreData.map(d=>d.score),
+        backgroundColor: scoreData.map(d=>COLORS[d.exp_num]+'bb'),
+        borderColor: scoreData.map(d=>COLORS[d.exp_num]),
+        borderWidth:1
+      }]
+    },
+    options: deepMerge(DARK_OPTS,{
+      indexAxis:'y',
+      plugins:{ legend:{display:false} },
+      scales:{
+        x:{ min:0, max:100, title:{display:true,text:'Score (0–100)',color:'#8892a4'}, grid:GRID, ticks:TICK },
+        y:{ grid:{display:false}, ticks:TICK }
+      }
+    })
+  });
+}
+
 // ── TABLE ─────────────────────────────────────────────────────────────
 function renderTable(){
   const filt=document.getElementById('tbl-filter').value;
@@ -468,12 +614,14 @@ function switchTab(name){
     if(name==='overview') renderOverview();
     if(name==='complexity') renderComplexity();
     if(name==='efficiency') renderEfficiency();
+    if(name==='radar') renderRadar();
     if(name==='table') renderTable();
   }
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────
 buildExpCheckboxes();
+buildRadarCheckboxes();
 buildTableFilters();
 rendered['overview']=true;
 renderOverview();
