@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bigger Bird — Experiment Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3e;
+    --text: #e2e8f0; --muted: #8892a4; --accent: #6366f1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; font-size: 14px; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 32px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 20px; font-weight: 700; }
+  header span { color: var(--muted); font-size: 13px; }
+  .tabs { display: flex; gap: 2px; padding: 16px 32px 0; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .tab { padding: 8px 18px; cursor: pointer; border-radius: 6px 6px 0 0; color: var(--muted); font-weight: 500; transition: all .15s; }
+  .tab.active { background: var(--accent); color: #fff; }
+  .tab:hover:not(.active) { color: var(--text); background: var(--border); }
+  .page { display: none; padding: 28px 32px; }
+  .page.active { display: block; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; align-items: center; }
+  .controls label { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  select, input[type=range] { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: 6px 10px; border-radius: 6px; font-size: 13px; }
+  .chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .card h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 14px; text-transform: uppercase; letter-spacing: .05em; }
+  .card.wide { grid-column: 1 / -1; }
+  canvas { max-height: 300px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); cursor: pointer; user-select: none; }
+  th:hover { color: var(--text); }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  tr:hover td { background: rgba(99,102,241,.07); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+  .pill-green { background: rgba(34,197,94,.15); color: #4ade80; }
+  .pill-red { background: rgba(239,68,68,.15); color: #f87171; }
+  .pill-yellow { background: rgba(234,179,8,.15); color: #fbbf24; }
+  .pill-blue { background: rgba(99,102,241,.15); color: #818cf8; }
+  .pill-gray { background: rgba(148,163,184,.1); color: var(--muted); }
+  .badge-oom { background: rgba(239,68,68,.15); color: #f87171; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+  .bar-bg { background: var(--border); border-radius: 3px; height: 6px; margin-top: 2px; }
+  .bar-fill { height: 6px; border-radius: 3px; background: var(--accent); transition: width .3s; }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .stat .val { font-size: 24px; font-weight: 700; color: var(--text); }
+  .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 4px; text-transform: uppercase; letter-spacing: .05em; }
+  @media (max-width: 900px) { .chart-grid { grid-template-columns: 1fr; } .stat-row { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div style="font-size:26px">🦅</div>
+  <div>
+    <h1>Bigger Bird</h1>
+    <span>Content-Aware Sparse Transformer — Experiment Dashboard</span>
+  </div>
+</header>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('overview')">Overview</div>
+  <div class="tab" onclick="switchTab('complexity')">Complexity</div>
+  <div class="tab" onclick="switchTab('efficiency')">Efficiency</div>
+  <div class="tab" onclick="switchTab('table')">All Runs</div>
+  <div class="tab" onclick="switchTab('context')">Project Context</div>
+</div>
+
+<!-- OVERVIEW -->
+<div id="page-overview" class="page active">
+  <div class="stat-row" id="stat-row"></div>
+  <div class="chart-grid">
+    <div class="card">
+      <h3>F1 Score vs Sequence Length</h3>
+      <canvas id="c-f1-seq"></canvas>
+    </div>
+    <div class="card">
+      <h3>Attention Forward Time (ms) vs Seq Length</h3>
+      <canvas id="c-speed-seq"></canvas>
+    </div>
+    <div class="card">
+      <h3>Peak Memory (MB) @ seq 1024</h3>
+      <canvas id="c-mem"></canvas>
+    </div>
+    <div class="card">
+      <h3>Softmax Comparisons vs Baseline (seq 1024)</h3>
+      <canvas id="c-softmax"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- COMPLEXITY -->
+<div id="page-complexity" class="page">
+  <div class="controls">
+    <span><label>Experiments:</label></span>
+    <div id="exp-checkboxes" style="display:flex;gap:10px;flex-wrap:wrap;"></div>
+  </div>
+  <div class="chart-grid">
+    <div class="card wide">
+      <h3>Log-Log: Attention Forward Time vs Sequence Length</h3>
+      <canvas id="c-loglog" style="max-height:380px"></canvas>
+    </div>
+    <div class="card">
+      <h3>Linear Scale — short sequences (128–512)</h3>
+      <canvas id="c-lin-short"></canvas>
+    </div>
+    <div class="card">
+      <h3>Linear Scale — long sequences (1024–4096+)</h3>
+      <canvas id="c-lin-long"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- EFFICIENCY -->
+<div id="page-efficiency" class="page">
+  <div class="controls">
+    <label>Sequence Length:</label>
+    <select id="eff-seq" onchange="renderEfficiency()">
+      <option value="1024">1024</option>
+      <option value="2048">2048</option>
+      <option value="4096">4096</option>
+    </select>
+  </div>
+  <div class="chart-grid">
+    <div class="card">
+      <h3>F1 Score</h3>
+      <canvas id="e-f1"></canvas>
+    </div>
+    <div class="card">
+      <h3>Train Time (s)</h3>
+      <canvas id="e-train"></canvas>
+    </div>
+    <div class="card">
+      <h3>Inference Latency (ms/seq)</h3>
+      <canvas id="e-lat"></canvas>
+    </div>
+    <div class="card">
+      <h3>Peak Memory (MB)</h3>
+      <canvas id="e-mem2"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ALL RUNS TABLE -->
+<div id="page-table" class="page">
+  <div class="controls">
+    <label>Filter exp:</label>
+    <select id="tbl-filter" onchange="renderTable()">
+      <option value="">All</option>
+    </select>
+    <label>Sort by:</label>
+    <select id="tbl-sort" onchange="renderTable()">
+      <option value="Timestamp">Date</option>
+      <option value="F1">F1</option>
+      <option value="Train_Time_s">Train Time</option>
+      <option value="Peak_Memory_MB">Memory</option>
+      <option value="Inference_Latency_ms">Latency</option>
+    </select>
+  </div>
+  <div class="card" style="overflow-x:auto">
+    <table id="runs-table">
+      <thead>
+        <tr>
+          <th>Experiment</th><th>Date</th><th>Samples</th>
+          <th>F1</th><th>Acc</th><th>Train (s)</th>
+          <th>Memory (MB)</th><th>Latency (ms)</th><th>Softmax Comp.</th>
+        </tr>
+      </thead>
+      <tbody id="runs-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- PROJECT CONTEXT -->
+<div id="page-context" class="page">
+  <div style="max-width:860px;line-height:1.7;display:grid;gap:20px;">
+
+    <div class="card">
+      <h3>Project Goal</h3>
+      <p style="margin-top:8px;color:var(--text)">Reduce Transformer self-attention from <strong>O(n²)</strong> to <strong>O(n)</strong> via content-aware discrete routing. Bigger Bird patches BART-base with three selection mechanisms: <em>diversity-aware local top-k</em>, <em>submodular global selection</em>, and <em>biased random teleports</em>.</p>
+    </div>
+
+    <div class="card">
+      <h3>Experiments (exp 0–10)</h3>
+      <table style="margin-top:8px">
+        <thead><tr><th>#</th><th>Name</th><th>Core Idea</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>Baseline</td><td>Standard dense BART attention</td><td><span class="pill pill-blue">Reference</span></td></tr>
+          <tr><td>1</td><td>DeepSeek Top-K</td><td>Low-rank (d=16) routing → top-64 keys per head</td><td><span class="pill pill-green">✓ Faster @1024+</span></td></tr>
+          <tr><td>2</td><td>Lightning Hybrid</td><td>Unfold sliding window + linear global path</td><td><span class="pill pill-yellow">⚠ Slower</span></td></tr>
+          <tr><td>3</td><td>Dynamic Globals</td><td>Learned gate selects G=16 global tokens + window</td><td><span class="pill pill-yellow">⚠ F1 unstable</span></td></tr>
+          <tr><td>4</td><td>PBS Attn</td><td>Head-shared block routing, sorted coalesced gathers</td><td><span class="pill pill-green">✓ Faster @1024+</span></td></tr>
+          <tr><td>5</td><td>Bigger Bird Unified</td><td>MMR local + submodular global + teleports</td><td><span class="pill pill-yellow">⚠ High memory</span></td></tr>
+          <tr><td>6</td><td>DeepSeek+PBS</td><td>Low-rank routing + block coalescing</td><td><span class="pill pill-yellow">⚠ F1=0 so far</span></td></tr>
+          <tr><td>7</td><td>Layer-Adaptive</td><td>Per-layer k schedule: dense→sparse→aggressive</td><td><span class="pill pill-green">✓ Best F1+Speed</span></td></tr>
+          <tr><td>8</td><td>Token Drop</td><td>Drop bottom 30% tokens after 3 dense layers</td><td><span class="pill pill-green">✓ Fastest train</span></td></tr>
+          <tr><td>9</td><td>Attn Speculation</td><td>Fast-path + KL distillation from full attn every 4 layers</td><td><span class="pill pill-green">✓ Good F1</span></td></tr>
+          <tr><td>10</td><td>GQA+Sparse</td><td>Group-Query Attn (12→4 KV heads) + top-K routing</td><td><span class="pill pill-yellow">⚠ F1=0 at 1024</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>May 2026 Fix Sprint — Key Findings</h3>
+      <ul style="margin-top:8px;padding-left:18px;display:grid;gap:6px;color:var(--text)">
+        <li>Old 6k benchmark used <strong>dynamic padding (~166 tokens)</strong> — sparse params weren't sparse at that length.</li>
+        <li>Old kernels did <strong>full O(n²) QKᵀ</strong> before masking; fixed to head-shared routing + efficient gathers.</li>
+        <li>Unfair pooling: patched models used AttnPool, baseline used first-token. Now all use <code>last_hidden[:,0,:]</code>.</li>
+        <li>Post-fix: <strong>exp1 &amp; exp4 ~3× faster</strong> than dense at 2048 tokens; exp3 at parity; exp2 still slower.</li>
+        <li>Next phase: long-context fixed-length training (512–4096 tokens, 6k–25k samples).</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h3>Team — UTMIST</h3>
+      <p style="margin-top:8px;color:var(--muted)"><strong style="color:var(--text)">Leads:</strong> Derek Chen, Han Fang &nbsp;|&nbsp; <strong style="color:var(--text)">Advisor:</strong> Isaac &nbsp;|&nbsp; <strong style="color:var(--text)">Devs:</strong> Adrian, Brian, Jerry, Karma, Mohamad, Ryan, Thomas</p>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── DATA ──────────────────────────────────────────────────────────────
+const COMPLEXITY = {"metadata":{"timestamp":"2026-06-05T01:05:40","device":"cuda","batch_size":"mixed","trials":10},"results":[{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":128,"time_ms":0.386,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":256,"time_ms":0.632,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":512,"time_ms":1.396,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":1024,"time_ms":3.537,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":2048,"time_ms":9.007,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":4096,"time_ms":27.09,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":8192,"time_ms":26.26,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":16384,"time_ms":95.41,"oom":false},{"exp_num":0,"exp_name":"exp_0_baseline","seq_length":32768,"time_ms":null,"oom":true},{"exp_num":1,"exp_name":"exp_1","seq_length":128,"time_ms":0.463,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":256,"time_ms":0.487,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":512,"time_ms":0.858,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":1024,"time_ms":1.567,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":2048,"time_ms":2.889,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":4096,"time_ms":5.834,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":8192,"time_ms":2.935,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":16384,"time_ms":5.485,"oom":false},{"exp_num":1,"exp_name":"exp_1","seq_length":32768,"time_ms":10.52,"oom":false},{"exp_num":2,"exp_name":"exp_2","seq_length":128,"time_ms":1.157,"oom":false},{"exp_num":2,"exp_name":"exp_2","seq_length":256,"time_ms":2.209,"oom":false},{"exp_num":2,"exp_name":"exp_2","seq_length":512,"time_ms":4.277,"oom":false},{"exp_num":2,"exp_name":"exp_2","seq_length":1024,"time_ms":8.783,"oom":false},{"exp_num":2,"exp_name":"exp_2","seq_length":2048,"time_ms":17.41,"oom":false},{"exp_num":2,"exp_name":"exp_2","seq_length":4096,"time_ms":34.41,"oom":false},{"exp_num":3,"exp_name":"exp_3","seq_length":128,"time_ms":0.873,"oom":false},{"exp_num":3,"exp_name":"exp_3","seq_length":256,"time_ms":1.432,"oom":false},{"exp_num":3,"exp_name":"exp_3","seq_length":512,"time_ms":2.642,"oom":false},{"exp_num":3,"exp_name":"exp_3","seq_length":1024,"time_ms":5.068,"oom":false},{"exp_num":3,"exp_name":"exp_3","seq_length":2048,"time_ms":9.94,"oom":false},{"exp_num":3,"exp_name":"exp_3","seq_length":4096,"time_ms":19.45,"oom":false},{"exp_num":4,"exp_name":"exp_4","seq_length":128,"time_ms":0.307,"oom":false},{"exp_num":4,"exp_name":"exp_4","seq_length":256,"time_ms":0.580,"oom":false},{"exp_num":4,"exp_name":"exp_4","seq_length":512,"time_ms":0.915,"oom":false},{"exp_num":4,"exp_name":"exp_4","seq_length":1024,"time_ms":1.663,"oom":false},{"exp_num":4,"exp_name":"exp_4","seq_length":2048,"time_ms":3.068,"oom":false},{"exp_num":4,"exp_name":"exp_4","seq_length":4096,"time_ms":6.162,"oom":false},{"exp_num":5,"exp_name":"exp_5","seq_length":128,"time_ms":1.078,"oom":false},{"exp_num":5,"exp_name":"exp_5","seq_length":256,"time_ms":1.872,"oom":false},{"exp_num":5,"exp_name":"exp_5","seq_length":512,"time_ms":3.499,"oom":false},{"exp_num":5,"exp_name":"exp_5","seq_length":1024,"time_ms":6.798,"oom":false},{"exp_num":5,"exp_name":"exp_5","seq_length":2048,"time_ms":13.46,"oom":false},{"exp_num":5,"exp_name":"exp_5","seq_length":4096,"time_ms":26.50,"oom":false},{"exp_num":6,"exp_name":"exp_6","seq_length":128,"time_ms":0.809,"oom":false},{"exp_num":6,"exp_name":"exp_6","seq_length":256,"time_ms":0.783,"oom":false},{"exp_num":6,"exp_name":"exp_6","seq_length":512,"time_ms":0.974,"oom":false},{"exp_num":6,"exp_name":"exp_6","seq_length":1024,"time_ms":1.678,"oom":false},{"exp_num":6,"exp_name":"exp_6","seq_length":2048,"time_ms":3.014,"oom":false},{"exp_num":6,"exp_name":"exp_6","seq_length":4096,"time_ms":6.147,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":128,"time_ms":0.528,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":256,"time_ms":0.487,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":512,"time_ms":0.857,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":1024,"time_ms":1.567,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":2048,"time_ms":2.897,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":4096,"time_ms":6.707,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":8192,"time_ms":2.953,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":16384,"time_ms":5.464,"oom":false},{"exp_num":7,"exp_name":"exp_7","seq_length":32768,"time_ms":10.50,"oom":false},{"exp_num":8,"exp_name":"exp_8","seq_length":128,"time_ms":0.303,"oom":false},{"exp_num":8,"exp_name":"exp_8","seq_length":256,"time_ms":0.499,"oom":false},{"exp_num":8,"exp_name":"exp_8","seq_length":512,"time_ms":1.105,"oom":false},{"exp_num":8,"exp_name":"exp_8","seq_length":1024,"time_ms":2.823,"oom":false},{"exp_num":8,"exp_name":"exp_8","seq_length":2048,"time_ms":8.315,"oom":false},{"exp_num":8,"exp_name":"exp_8","seq_length":4096,"time_ms":27.09,"oom":false},{"exp_num":9,"exp_name":"exp_9","seq_length":128,"time_ms":0.745,"oom":false},{"exp_num":9,"exp_name":"exp_9","seq_length":256,"time_ms":1.294,"oom":false},{"exp_num":9,"exp_name":"exp_9","seq_length":512,"time_ms":2.433,"oom":false},{"exp_num":9,"exp_name":"exp_9","seq_length":1024,"time_ms":4.722,"oom":false},{"exp_num":9,"exp_name":"exp_9","seq_length":2048,"time_ms":9.451,"oom":false},{"exp_num":9,"exp_name":"exp_9","seq_length":4096,"time_ms":18.58,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":128,"time_ms":0.493,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":256,"time_ms":0.503,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":512,"time_ms":0.883,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":1024,"time_ms":1.595,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":2048,"time_ms":2.961,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":4096,"time_ms":6.925,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":8192,"time_ms":3.007,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":16384,"time_ms":5.589,"oom":false},{"exp_num":10,"exp_name":"exp_10","seq_length":32768,"time_ms":10.74,"oom":false}]};
+
+const EFFICIENCY = [{"exp_name":"exp_0_baseline","exp_num":0,"seq_length":1024,"f1":0.907,"accuracy":0.91,"train_time_s":94.96,"peak_memory_mb":2715.76,"inference_latency_ms":13.46,"softmax_comparisons":150994944,"oom":false},{"exp_name":"exp_1_deepseek_topk","exp_num":1,"seq_length":1024,"f1":0.846,"accuracy":0.84,"train_time_s":100.55,"peak_memory_mb":2717.74,"inference_latency_ms":15.78,"softmax_comparisons":9437184,"oom":false},{"exp_name":"exp_2_lightning_hybrid","exp_num":2,"seq_length":1024,"f1":0.602,"accuracy":0.63,"train_time_s":126.10,"peak_memory_mb":2793.54,"inference_latency_ms":20.15,"softmax_comparisons":18874368,"oom":false},{"exp_name":"exp_3_dynamic_globals","exp_num":3,"seq_length":1024,"f1":0.295,"accuracy":0.57,"train_time_s":123.66,"peak_memory_mb":2715.56,"inference_latency_ms":18.54,"softmax_comparisons":11796480,"oom":false},{"exp_name":"exp_4_pbs_attn","exp_num":4,"seq_length":1024,"f1":0.0,"accuracy":0.53,"train_time_s":104.68,"peak_memory_mb":2715.64,"inference_latency_ms":15.37,"softmax_comparisons":18874368,"oom":false},{"exp_name":"exp_5_bigger_bird","exp_num":5,"seq_length":1024,"f1":0.0,"accuracy":0.53,"train_time_s":132.71,"peak_memory_mb":3923.55,"inference_latency_ms":20.83,"softmax_comparisons":8257536,"oom":false},{"exp_name":"exp_6_deepseek_pbs","exp_num":6,"seq_length":1024,"f1":0.0,"accuracy":0.53,"train_time_s":87.68,"peak_memory_mb":2726.13,"inference_latency_ms":18.29,"softmax_comparisons":9437184,"oom":false},{"exp_name":"exp_7_layer_adaptive","exp_num":7,"seq_length":1024,"f1":0.891,"accuracy":0.90,"train_time_s":84.54,"peak_memory_mb":2724.52,"inference_latency_ms":15.95,"softmax_comparisons":14155776,"oom":false},{"exp_name":"exp_8_token_drop","exp_num":8,"seq_length":1024,"f1":0.286,"accuracy":0.60,"train_time_s":37.47,"peak_memory_mb":1833.58,"inference_latency_ms":5.41,"softmax_comparisons":93115584,"oom":false},{"exp_name":"exp_9_attn_specul","exp_num":9,"seq_length":1024,"f1":0.841,"accuracy":0.86,"train_time_s":132.52,"peak_memory_mb":4113.40,"inference_latency_ms":16.61,"softmax_comparisons":10027008,"oom":false},{"exp_name":"exp_10_gqa_sparse","exp_num":10,"seq_length":1024,"f1":0.0,"accuracy":0.53,"train_time_s":80.52,"peak_memory_mb":2725.88,"inference_latency_ms":17.77,"softmax_comparisons":9437184,"oom":false},{"exp_name":"exp_0_baseline","exp_num":0,"seq_length":2048,"f1":0.887,"accuracy":0.89,"train_time_s":97.80,"peak_memory_mb":2780.38,"inference_latency_ms":13.03,"softmax_comparisons":603979776,"oom":false},{"exp_name":"exp_1_deepseek_topk","exp_num":1,"seq_length":2048,"f1":0.800,"accuracy":0.81,"train_time_s":105.46,"peak_memory_mb":2779.64,"inference_latency_ms":14.87,"softmax_comparisons":18874368,"oom":false},{"exp_name":"exp_2_lightning_hybrid","exp_num":2,"seq_length":2048,"f1":0.637,"accuracy":0.67,"train_time_s":183.10,"peak_memory_mb":3460.90,"inference_latency_ms":28.75,"softmax_comparisons":37748736,"oom":false},{"exp_name":"exp_3_dynamic_globals","exp_num":3,"seq_length":2048,"f1":0.0,"accuracy":0.53,"train_time_s":162.49,"peak_memory_mb":2857.49,"inference_latency_ms":21.98,"softmax_comparisons":23592960,"oom":false},{"exp_name":"exp_4_pbs_attn","exp_num":4,"seq_length":2048,"f1":0.0,"accuracy":0.53,"train_time_s":106.46,"peak_memory_mb":2786.88,"inference_latency_ms":15.63,"softmax_comparisons":37748736,"oom":false},{"exp_name":"exp_5_bigger_bird","exp_num":5,"seq_length":2048,"f1":0.0,"accuracy":0.53,"train_time_s":245.15,"peak_memory_mb":8778.69,"inference_latency_ms":25.28,"softmax_comparisons":16515072,"oom":false},{"exp_name":"exp_6_deepseek_pbs","exp_num":6,"seq_length":2048,"f1":0.0,"accuracy":0.53,"train_time_s":88.20,"peak_memory_mb":2780.16,"inference_latency_ms":18.51,"softmax_comparisons":18874368,"oom":false},{"exp_name":"exp_7_layer_adaptive","exp_num":7,"seq_length":2048,"f1":0.830,"accuracy":0.84,"train_time_s":81.33,"peak_memory_mb":2781.52,"inference_latency_ms":15.59,"softmax_comparisons":28311552,"oom":false},{"exp_name":"exp_8_token_drop","exp_num":8,"seq_length":2048,"f1":0.776,"accuracy":0.81,"train_time_s":41.32,"peak_memory_mb":1857.33,"inference_latency_ms":5.21,"softmax_comparisons":372771756,"oom":false},{"exp_name":"exp_9_attn_specul","exp_num":9,"seq_length":2048,"f1":0.860,"accuracy":0.86,"train_time_s":253.37,"peak_memory_mb":9395.42,"inference_latency_ms":21.00,"softmax_comparisons":20054016,"oom":false},{"exp_name":"exp_10_gqa_sparse","exp_num":10,"seq_length":2048,"f1":0.0,"accuracy":0.53,"train_time_s":84.26,"peak_memory_mb":2780.92,"inference_latency_ms":15.86,"softmax_comparisons":18874368,"oom":false},{"exp_name":"exp_0_baseline","exp_num":0,"seq_length":4096,"f1":0.866,"accuracy":0.87,"train_time_s":170.78,"peak_memory_mb":2814.83,"inference_latency_ms":24.53,"softmax_comparisons":2415919104,"oom":false},{"exp_name":"exp_1_deepseek_topk","exp_num":1,"seq_length":4096,"f1":0.837,"accuracy":0.84,"train_time_s":131.50,"peak_memory_mb":2815.10,"inference_latency_ms":20.69,"softmax_comparisons":37748736,"oom":false},{"exp_name":"exp_2_lightning_hybrid","exp_num":2,"seq_length":4096,"f1":0.0,"accuracy":0.53,"train_time_s":334.11,"peak_memory_mb":4725.22,"inference_latency_ms":52.44,"softmax_comparisons":75497472,"oom":false},{"exp_name":"exp_3_dynamic_globals","exp_num":3,"seq_length":4096,"f1":0.0,"accuracy":0.53,"train_time_s":282.09,"peak_memory_mb":3511.72,"inference_latency_ms":36.98,"softmax_comparisons":47185920,"oom":false},{"exp_name":"exp_4_pbs_attn","exp_num":4,"seq_length":4096,"f1":0.0,"accuracy":0.53,"train_time_s":132.71,"peak_memory_mb":2815.10,"inference_latency_ms":21.12,"softmax_comparisons":75497472,"oom":false},{"exp_name":"exp_5_bigger_bird","exp_num":5,"seq_length":4096,"f1":null,"accuracy":null,"train_time_s":null,"peak_memory_mb":null,"inference_latency_ms":null,"oom":true},{"exp_name":"exp_6_deepseek_pbs","exp_num":6,"seq_length":4096,"f1":0.0,"accuracy":0.53,"train_time_s":126.40,"peak_memory_mb":2823.06,"inference_latency_ms":24.95,"softmax_comparisons":37748736,"oom":false},{"exp_name":"exp_7_layer_adaptive","exp_num":7,"seq_length":4096,"f1":0.864,"accuracy":0.88,"train_time_s":124.57,"peak_memory_mb":2816.96,"inference_latency_ms":21.88,"softmax_comparisons":56623104,"oom":false},{"exp_name":"exp_8_token_drop","exp_num":8,"seq_length":4096,"f1":0.808,"accuracy":0.81,"train_time_s":64.76,"peak_memory_mb":1894.22,"inference_latency_ms":8.33,"softmax_comparisons":1491706188,"oom":false},{"exp_name":"exp_9_attn_specul","exp_num":9,"seq_length":4096,"f1":null,"accuracy":null,"train_time_s":null,"peak_memory_mb":null,"inference_latency_ms":null,"oom":true},{"exp_name":"exp_10_gqa_sparse","exp_num":10,"seq_length":4096,"f1":0.75,"accuracy":0.80,"train_time_s":123.18,"peak_memory_mb":2816.58,"inference_latency_ms":22.30,"softmax_comparisons":37748736,"oom":false}];
+
+const CSV_ROWS = [
+  {Experiment:"exp_0_baseline",Timestamp:"20260516_161822",Train_Samples:6000,F1:0.931,Accuracy:0.931,Train_Time_s:216.7,Eval_Time_s:4.16,Epochs:3,Train_Loss:1.647,Eval_Loss:0.251,Peak_Memory_MB:0,Inference_Latency_ms:null,Softmax_Comparisons:null},
+  {Experiment:"exp_0_baseline",Timestamp:"20260527_214246",Train_Samples:500,F1:0.891,Accuracy:0.89,Train_Time_s:123.1,Eval_Time_s:3.91,Epochs:2,Train_Loss:1.303,Eval_Loss:1.197,Peak_Memory_MB:2723.77,Inference_Latency_ms:16.26,Softmax_Comparisons:3968064},
+  {Experiment:"exp_0_baseline",Timestamp:"20260531_034645",Train_Samples:500,F1:0.907,Accuracy:0.91,Train_Time_s:94.96,Eval_Time_s:1.64,Epochs:2,Train_Loss:0.707,Eval_Loss:0.566,Peak_Memory_MB:2715.76,Inference_Latency_ms:13.46,Softmax_Comparisons:150994944},
+  {Experiment:"exp_0_baseline",Timestamp:"20260531_045325",Train_Samples:6000,F1:0.930,Accuracy:0.931,Train_Time_s:831.8,Eval_Time_s:9.93,Epochs:3,Train_Loss:1.682,Eval_Loss:0.258,Peak_Memory_MB:3123.20,Inference_Latency_ms:12.85,Softmax_Comparisons:603979776},
+  {Experiment:"exp_1_deepseek_topk",Timestamp:"20260516_165537",Train_Samples:6000,F1:0.926,Accuracy:0.927,Train_Time_s:609.8,Eval_Time_s:6.93,Epochs:3,Train_Loss:1.701,Eval_Loss:0.234,Peak_Memory_MB:0,Inference_Latency_ms:null,Softmax_Comparisons:null},
+  {Experiment:"exp_1_deepseek_topk",Timestamp:"20260531_034837",Train_Samples:500,F1:0.846,Accuracy:0.84,Train_Time_s:100.5,Eval_Time_s:1.79,Epochs:2,Train_Loss:0.937,Eval_Loss:1.077,Peak_Memory_MB:2717.74,Inference_Latency_ms:15.78,Softmax_Comparisons:9437184},
+  {Experiment:"exp_1_deepseek_topk",Timestamp:"20260531_050502",Train_Samples:6000,F1:0.873,Accuracy:0.873,Train_Time_s:678.1,Eval_Time_s:8.76,Epochs:3,Train_Loss:2.738,Eval_Loss:0.359,Peak_Memory_MB:3123.97,Inference_Latency_ms:15.30,Softmax_Comparisons:18874368},
+  {Experiment:"exp_2_lightning_hybrid",Timestamp:"20260516_180354",Train_Samples:6000,F1:0.908,Accuracy:0.908,Train_Time_s:267.5,Eval_Time_s:5.61,Epochs:3,Train_Loss:2.225,Eval_Loss:0.281,Peak_Memory_MB:0,Inference_Latency_ms:null,Softmax_Comparisons:null},
+  {Experiment:"exp_2_lightning_hybrid",Timestamp:"20260531_041918",Train_Samples:500,F1:0.602,Accuracy:0.63,Train_Time_s:126.1,Eval_Time_s:2.27,Epochs:2,Train_Loss:1.334,Eval_Loss:1.895,Peak_Memory_MB:2793.54,Inference_Latency_ms:20.15,Softmax_Comparisons:18874368},
+  {Experiment:"exp_3_dynamic_globals",Timestamp:"20260527_214538",Train_Samples:500,F1:0.915,Accuracy:0.92,Train_Time_s:147.3,Eval_Time_s:4.36,Epochs:2,Train_Loss:1.394,Eval_Loss:0.784,Peak_Memory_MB:3046.80,Inference_Latency_ms:21.38,Softmax_Comparisons:1912320},
+  {Experiment:"exp_3_dynamic_globals",Timestamp:"20260531_042135",Train_Samples:500,F1:0.295,Accuracy:0.57,Train_Time_s:123.7,Eval_Time_s:2.16,Epochs:2,Train_Loss:1.323,Eval_Loss:1.277,Peak_Memory_MB:2715.56,Inference_Latency_ms:18.54,Softmax_Comparisons:11796480},
+  {Experiment:"exp_4_pbs_attn",Timestamp:"20260516_171644",Train_Samples:6000,F1:0.902,Accuracy:0.903,Train_Time_s:843.2,Eval_Time_s:7.97,Epochs:3,Train_Loss:2.485,Eval_Loss:0.237,Peak_Memory_MB:0,Inference_Latency_ms:null,Softmax_Comparisons:null},
+  {Experiment:"exp_4_pbs_attn",Timestamp:"20260531_035056",Train_Samples:500,F1:0.0,Accuracy:0.53,Train_Time_s:104.7,Eval_Time_s:1.81,Epochs:2,Train_Loss:1.369,Eval_Loss:1.830,Peak_Memory_MB:2715.64,Inference_Latency_ms:15.37,Softmax_Comparisons:18874368},
+  {Experiment:"exp_5_bigger_bird",Timestamp:"20260531_150003",Train_Samples:500,F1:0.185,Accuracy:0.56,Train_Time_s:147.1,Eval_Time_s:2.10,Epochs:2,Train_Loss:1.316,Eval_Loss:0.975,Peak_Memory_MB:3905.29,Inference_Latency_ms:18.27,Softmax_Comparisons:8257536},
+  {Experiment:"exp_6_deepseek_pbs",Timestamp:"20260604_231805",Train_Samples:500,F1:0.0,Accuracy:0.53,Train_Time_s:87.68,Eval_Time_s:2.29,Epochs:2,Train_Loss:1.319,Eval_Loss:1.213,Peak_Memory_MB:2726.13,Inference_Latency_ms:18.29,Softmax_Comparisons:9437184},
+  {Experiment:"exp_7_layer_adaptive",Timestamp:"20260604_231945",Train_Samples:500,F1:0.891,Accuracy:0.90,Train_Time_s:84.54,Eval_Time_s:1.95,Epochs:2,Train_Loss:1.048,Eval_Loss:0.616,Peak_Memory_MB:2724.52,Inference_Latency_ms:15.95,Softmax_Comparisons:14155776},
+  {Experiment:"exp_7_layer_adaptive",Timestamp:"20260531_154405",Train_Samples:6000,F1:0.901,Accuracy:0.901,Train_Time_s:687.5,Eval_Time_s:8.94,Epochs:3,Train_Loss:2.488,Eval_Loss:0.296,Peak_Memory_MB:3120.06,Inference_Latency_ms:15.02,Softmax_Comparisons:28311552},
+  {Experiment:"exp_8_token_drop",Timestamp:"20260604_232038",Train_Samples:500,F1:0.286,Accuracy:0.60,Train_Time_s:37.47,Eval_Time_s:0.87,Epochs:2,Train_Loss:0.813,Eval_Loss:0.787,Peak_Memory_MB:1833.58,Inference_Latency_ms:5.41,Softmax_Comparisons:93115584},
+  {Experiment:"exp_8_token_drop",Timestamp:"20260604_234654",Train_Samples:500,F1:0.808,Accuracy:0.81,Train_Time_s:64.76,Eval_Time_s:1.40,Epochs:2,Train_Loss:0.685,Eval_Loss:0.860,Peak_Memory_MB:1894.22,Inference_Latency_ms:8.33,Softmax_Comparisons:1491706188},
+  {Experiment:"exp_9_attn_specul",Timestamp:"20260604_232307",Train_Samples:500,F1:0.841,Accuracy:0.86,Train_Time_s:132.5,Eval_Time_s:2.05,Epochs:2,Train_Loss:1.465,Eval_Loss:0.850,Peak_Memory_MB:4113.40,Inference_Latency_ms:16.61,Softmax_Comparisons:10027008},
+  {Experiment:"exp_9_attn_specul",Timestamp:"20260604_233815",Train_Samples:500,F1:0.860,Accuracy:0.86,Train_Time_s:253.4,Eval_Time_s:2.45,Epochs:2,Train_Loss:1.650,Eval_Loss:0.855,Peak_Memory_MB:9395.42,Inference_Latency_ms:21.00,Softmax_Comparisons:20054016},
+  {Experiment:"exp_10_gqa_sparse",Timestamp:"20260531_152150",Train_Samples:500,F1:0.763,Accuracy:0.77,Train_Time_s:107.2,Eval_Time_s:1.94,Epochs:2,Train_Loss:1.096,Eval_Loss:0.822,Peak_Memory_MB:2714.26,Inference_Latency_ms:15.50,Softmax_Comparisons:9437184},
+  {Experiment:"exp_10_gqa_sparse",Timestamp:"20260604_234928",Train_Samples:500,F1:0.75,Accuracy:0.80,Train_Time_s:123.2,Eval_Time_s:2.78,Epochs:2,Train_Loss:1.152,Eval_Loss:0.715,Peak_Memory_MB:2816.58,Inference_Latency_ms:22.30,Softmax_Comparisons:37748736}
+];
+
+// ── PALETTE ───────────────────────────────────────────────────────────
+const EXP_NAMES = {
+  0:"Baseline",1:"DeepSeek Top-K",2:"Lightning Hybrid",3:"Dynamic Globals",
+  4:"PBS Attn",5:"Bigger Bird",6:"DeepSeek+PBS",7:"Layer-Adaptive",
+  8:"Token Drop",9:"Attn Specul",10:"GQA+Sparse"
+};
+const COLORS = [
+  '#94a3b8','#6366f1','#f59e0b','#10b981','#ef4444',
+  '#8b5cf6','#06b6d4','#f97316','#84cc16','#ec4899','#14b8a6'
+];
+const GRID = { color:'rgba(255,255,255,0.05)' };
+const TICK = { color:'#8892a4', font:{size:11} };
+const DARK_OPTS = {
+  responsive:true, maintainAspectRatio:true,
+  plugins:{ legend:{ labels:{ color:'#e2e8f0', font:{size:11}, boxWidth:12 } } },
+  scales:{
+    x:{ grid:GRID, ticks:TICK },
+    y:{ grid:GRID, ticks:TICK }
+  }
+};
+
+function deepMerge(base, over){
+  const r = Object.assign({},base);
+  for(const k in over){
+    if(over[k]&&typeof over[k]==='object'&&!Array.isArray(over[k]))
+      r[k]=deepMerge(r[k]||{},over[k]);
+    else r[k]=over[k];
+  }
+  return r;
+}
+
+const charts = {};
+function mkChart(id, cfg){ if(charts[id]) charts[id].destroy(); charts[id]=new Chart(document.getElementById(id).getContext('2d'),cfg); }
+
+// ── OVERVIEW ──────────────────────────────────────────────────────────
+function renderOverview(){
+  // stat cards
+  const best = EFFICIENCY.filter(d=>d.seq_length===1024&&d.f1>0).sort((a,b)=>b.f1-a.f1)[0];
+  const bestSpd = EFFICIENCY.filter(d=>d.seq_length===2048&&!d.oom).sort((a,b)=>a.train_time_s-b.train_time_s)[0];
+  const baselineSoftmax = EFFICIENCY.find(d=>d.exp_num===0&&d.seq_length===4096)?.softmax_comparisons||1;
+  const bestReduction = EFFICIENCY.filter(d=>d.seq_length===4096&&!d.oom&&d.f1>0.7)
+    .map(d=>({name:EXP_NAMES[d.exp_num],ratio:baselineSoftmax/d.softmax_comparisons}))
+    .sort((a,b)=>b.ratio-a.ratio)[0];
+  document.getElementById('stat-row').innerHTML = `
+    <div class="stat"><div class="val">${best?.f1.toFixed(3)||'—'}</div><div class="lbl">Best F1 @seq1024 (${EXP_NAMES[best?.exp_num]})</div></div>
+    <div class="stat"><div class="val">${bestSpd?.train_time_s.toFixed(0)||'—'}s</div><div class="lbl">Fastest train @seq2048 (${EXP_NAMES[bestSpd?.exp_num]})</div></div>
+    <div class="stat"><div class="val">${bestReduction?.ratio.toFixed(0)||'—'}×</div><div class="lbl">Softmax reduction @seq4096 (${bestReduction?.name})</div></div>
+    <div class="stat"><div class="val">11</div><div class="lbl">Experiments (exp 0–10)</div></div>
+  `;
+
+  // F1 vs seq length
+  const exps = [0,1,7,8,9];
+  const seqs = [1024,2048,4096];
+  mkChart('c-f1-seq',{type:'line',data:{labels:seqs,datasets:exps.map(e=>({
+    label:EXP_NAMES[e], borderColor:COLORS[e], backgroundColor:COLORS[e]+'33',
+    data:seqs.map(s=>{const r=EFFICIENCY.find(d=>d.exp_num===e&&d.seq_length===s); return r&&!r.oom?r.f1:null;}),
+    tension:.3, pointRadius:5
+  }))},options:deepMerge(DARK_OPTS,{plugins:{legend:{position:'bottom'}}})});
+
+  // complexity forward speed
+  const cExps = [0,1,4,7];
+  const allSeqs = [...new Set(COMPLEXITY.results.map(r=>r.seq_length))].sort((a,b)=>a-b).filter(s=>s<=4096);
+  mkChart('c-speed-seq',{type:'line',data:{labels:allSeqs,datasets:cExps.map(e=>({
+    label:EXP_NAMES[e], borderColor:COLORS[e], backgroundColor:COLORS[e]+'33',
+    data:allSeqs.map(s=>{const r=COMPLEXITY.results.find(d=>d.exp_num===e&&d.seq_length===s); return r&&!r.oom?r.time_ms:null;}),
+    tension:.3, pointRadius:4
+  }))},options:deepMerge(DARK_OPTS,{plugins:{legend:{position:'bottom'}},scales:{y:{title:{display:true,text:'ms',color:'#8892a4'}}}})});
+
+  // memory bar
+  const mem1024 = EFFICIENCY.filter(d=>d.seq_length===1024).sort((a,b)=>a.exp_num-b.exp_num);
+  mkChart('c-mem',{type:'bar',data:{
+    labels:mem1024.map(d=>EXP_NAMES[d.exp_num]),
+    datasets:[{label:'Peak Memory MB',data:mem1024.map(d=>d.peak_memory_mb),
+      backgroundColor:mem1024.map(d=>COLORS[d.exp_num])+'bb',
+      borderColor:mem1024.map(d=>COLORS[d.exp_num]),borderWidth:1}]
+  },options:deepMerge(DARK_OPTS,{plugins:{legend:{display:false}}})});
+
+  // softmax reduction
+  const base1024 = EFFICIENCY.find(d=>d.exp_num===0&&d.seq_length===1024)?.softmax_comparisons||1;
+  const smData = EFFICIENCY.filter(d=>d.seq_length===1024).sort((a,b)=>a.exp_num-b.exp_num);
+  mkChart('c-softmax',{type:'bar',data:{
+    labels:smData.map(d=>EXP_NAMES[d.exp_num]),
+    datasets:[{label:'Softmax Comparisons (M)',
+      data:smData.map(d=>d.softmax_comparisons?(d.softmax_comparisons/1e6):0),
+      backgroundColor:smData.map(d=>COLORS[d.exp_num])+'bb',
+      borderColor:smData.map(d=>COLORS[d.exp_num]),borderWidth:1}]
+  },options:deepMerge(DARK_OPTS,{plugins:{legend:{display:false}},scales:{y:{title:{display:true,text:'Millions',color:'#8892a4'}}}})});
+}
+
+// ── COMPLEXITY ────────────────────────────────────────────────────────
+const activeExps = new Set([0,1,2,3,4,7]);
+function renderComplexity(){
+  const logSeqs = [...new Set(COMPLEXITY.results.map(r=>r.seq_length))].sort((a,b)=>a-b);
+  const selected = [...activeExps];
+
+  const logDatasets = selected.map(e=>({
+    label:EXP_NAMES[e], borderColor:COLORS[e], backgroundColor:'transparent',
+    data:logSeqs.map(s=>{const r=COMPLEXITY.results.find(d=>d.exp_num===e&&d.seq_length===s); return r&&r.time_ms?{x:Math.log2(s),y:Math.log2(r.time_ms)}:null;}).filter(Boolean),
+    tension:.2, pointRadius:4
+  }));
+
+  mkChart('c-loglog',{type:'line',data:{labels:logSeqs.map(s=>s.toLocaleString()),datasets:logDatasets},
+    options:deepMerge(DARK_OPTS,{
+      parsing:false,
+      plugins:{legend:{position:'right'},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ${Math.pow(2,c.parsed.y).toFixed(2)}ms @${Math.pow(2,c.parsed.x).toFixed(0)}`}}},
+      scales:{x:{type:'linear',title:{display:true,text:'log₂(seq length)',color:'#8892a4'},grid:GRID,ticks:TICK},
+              y:{title:{display:true,text:'log₂(time ms)',color:'#8892a4'},grid:GRID,ticks:TICK}}
+    })
+  });
+
+  const short=[128,256,512], long=[1024,2048,4096];
+  mkChart('c-lin-short',{type:'line',data:{labels:short,datasets:selected.map(e=>({
+    label:EXP_NAMES[e],borderColor:COLORS[e],backgroundColor:COLORS[e]+'22',
+    data:short.map(s=>{const r=COMPLEXITY.results.find(d=>d.exp_num===e&&d.seq_length===s);return r?r.time_ms:null;}),
+    tension:.3,pointRadius:5
+  }))},options:deepMerge(DARK_OPTS,{plugins:{legend:{position:'bottom'}},scales:{y:{title:{display:true,text:'ms',color:'#8892a4'}}}})});
+
+  mkChart('c-lin-long',{type:'line',data:{labels:long,datasets:selected.map(e=>({
+    label:EXP_NAMES[e],borderColor:COLORS[e],backgroundColor:COLORS[e]+'22',
+    data:long.map(s=>{const r=COMPLEXITY.results.find(d=>d.exp_num===e&&d.seq_length===s);return r?r.time_ms:null;}),
+    tension:.3,pointRadius:5
+  }))},options:deepMerge(DARK_OPTS,{plugins:{legend:{position:'bottom'}},scales:{y:{title:{display:true,text:'ms',color:'#8892a4'}}}})});
+}
+
+function buildExpCheckboxes(){
+  const c=document.getElementById('exp-checkboxes');
+  for(let e=0;e<=10;e++){
+    const lbl=document.createElement('label');
+    lbl.style.cssText='display:flex;align-items:center;gap:4px;cursor:pointer;';
+    const cb=document.createElement('input');
+    cb.type='checkbox'; cb.checked=activeExps.has(e);
+    cb.style.accentColor=COLORS[e];
+    cb.onchange=()=>{ if(cb.checked) activeExps.add(e); else activeExps.delete(e); renderComplexity(); };
+    const dot=document.createElement('span');
+    dot.style.cssText=`width:10px;height:10px;border-radius:50%;background:${COLORS[e]};display:inline-block;`;
+    lbl.appendChild(cb); lbl.appendChild(dot);
+    lbl.appendChild(document.createTextNode(' '+EXP_NAMES[e]));
+    c.appendChild(lbl);
+  }
+}
+
+// ── EFFICIENCY ────────────────────────────────────────────────────────
+function renderEfficiency(){
+  const seq=parseInt(document.getElementById('eff-seq').value);
+  const rows=EFFICIENCY.filter(d=>d.seq_length===seq).sort((a,b)=>a.exp_num-b.exp_num);
+  const labels=rows.map(d=>EXP_NAMES[d.exp_num]);
+  const bgs=rows.map(d=>COLORS[d.exp_num]+'bb');
+  const bds=rows.map(d=>COLORS[d.exp_num]);
+  const oomLabel=rows.map(d=>d.oom?'OOM':null);
+
+  function barChart(id,field,title){
+    mkChart(id,{type:'bar',data:{labels,datasets:[{label:title,
+      data:rows.map(d=>d.oom||d[field]==null?0:d[field]),
+      backgroundColor:bgs,borderColor:bds,borderWidth:1}]},
+      options:deepMerge(DARK_OPTS,{plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>{const r=rows[c.dataIndex];return r.oom?'OOM':c.formattedValue;}}}},
+        scales:{x:{ticks:{...TICK,maxRotation:30}},y:{title:{display:true,text:title,color:'#8892a4'}}}
+      })
+    });
+  }
+  barChart('e-f1','f1','F1 Score');
+  barChart('e-train','train_time_s','Train Time (s)');
+  barChart('e-lat','inference_latency_ms','Latency (ms)');
+  barChart('e-mem2','peak_memory_mb','Memory (MB)');
+}
+
+// ── TABLE ─────────────────────────────────────────────────────────────
+function renderTable(){
+  const filt=document.getElementById('tbl-filter').value;
+  const sortKey=document.getElementById('tbl-sort').value;
+  let rows=[...CSV_ROWS];
+  if(filt) rows=rows.filter(r=>r.Experiment===filt);
+  rows.sort((a,b)=>{
+    if(sortKey==='F1') return (b.F1||0)-(a.F1||0);
+    if(sortKey==='Train_Time_s') return (a.Train_Time_s||0)-(b.Train_Time_s||0);
+    if(sortKey==='Peak_Memory_MB') return (a.Peak_Memory_MB||0)-(b.Peak_Memory_MB||0);
+    if(sortKey==='Inference_Latency_ms') return (a.Inference_Latency_ms||0)-(b.Inference_Latency_ms||0);
+    return a.Timestamp<b.Timestamp?1:-1;
+  });
+  const tb=document.getElementById('runs-tbody');
+  const maxF1=Math.max(...rows.map(r=>r.F1||0));
+  tb.innerHTML=rows.map(r=>{
+    const f1Color = r.F1>=0.9?'pill-green':r.F1>=0.7?'pill-yellow':r.F1>0?'pill-red':'pill-gray';
+    const ts=r.Timestamp?r.Timestamp.replace(/(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/,'$1-$2-$3 $4:$5'):r.Timestamp;
+    return `<tr>
+      <td><span class="pill pill-blue">${r.Experiment}</span></td>
+      <td style="color:var(--muted);font-size:12px">${ts}</td>
+      <td>${r.Train_Samples?.toLocaleString()||'—'}</td>
+      <td><span class="pill ${f1Color}">${r.F1!=null?r.F1.toFixed(3):'—'}</span></td>
+      <td>${r.Accuracy!=null?(r.Accuracy*100).toFixed(0)+'%':'—'}</td>
+      <td>${r.Train_Time_s!=null?r.Train_Time_s.toFixed(1):'—'}</td>
+      <td>${r.Peak_Memory_MB>0?r.Peak_Memory_MB.toFixed(0):'—'}</td>
+      <td>${r.Inference_Latency_ms!=null?r.Inference_Latency_ms.toFixed(1):'—'}</td>
+      <td>${r.Softmax_Comparisons!=null?(r.Softmax_Comparisons/1e6).toFixed(1)+'M':'—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function buildTableFilters(){
+  const sel=document.getElementById('tbl-filter');
+  const exps=[...new Set(CSV_ROWS.map(r=>r.Experiment))].sort();
+  exps.forEach(e=>{ const o=document.createElement('option'); o.value=e; o.textContent=e; sel.appendChild(o); });
+}
+
+// ── TABS ──────────────────────────────────────────────────────────────
+const rendered = {};
+function switchTab(name){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('page-'+name).classList.add('active');
+  if(!rendered[name]){
+    rendered[name]=true;
+    if(name==='overview') renderOverview();
+    if(name==='complexity') renderComplexity();
+    if(name==='efficiency') renderEfficiency();
+    if(name==='table') renderTable();
+  }
+}
+
+// ── INIT ──────────────────────────────────────────────────────────────
+buildExpCheckboxes();
+buildTableFilters();
+rendered['overview']=true;
+renderOverview();
+</script>
+</body>
+</html>
