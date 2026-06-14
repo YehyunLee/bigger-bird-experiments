@@ -171,6 +171,8 @@ Examples:
                        help="Save model weights to benchmarks/<exp>/weights_<timestamp>/ for later eval")
     parser.add_argument("--cpu", action="store_true",
                        help="Force CPU training (needed for seq>=2048 on Apple MPS due to buffer limits)")
+    parser.add_argument("--compile", action="store_true",
+                       help="Enable torch.compile for the training/eval graph (fused kernels)")
     
     args = parser.parse_args()
     
@@ -255,6 +257,7 @@ Examples:
         grad_accum_steps=compute["grad_accum"],
         lr=args.lr,
         use_cpu=args.cpu,
+        torch_compile=args.compile,
     )
     
     # Run

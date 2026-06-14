@@ -160,23 +160,42 @@ def gather_attention_triton_or_none(
 
     ``indices`` may be head-shared ``[BH, M]`` (broadcast across queries) or
     per-query ``[BH, T, M]``. Q is assumed pre-scaled, so ``scale`` defaults to 1.0.
+
+    At inference this uses the forward-only fused kernel. During training, if the
+    experimental training-kernel flag is enabled, it uses the autograd-capable
+    kernel (which carries gradients); otherwise it returns None to fall back.
     """
     from .kernels import (
         build_gather_key_mask,
+        gather_attention_autograd,
+        should_use_train_kernel,
         should_use_triton,
         sparse_gather_attention,
     )
 
+    tgt_len = Q.size(1)
+
+    def _token_idx():
+        idx = indices
+        if idx.dim() == 2:
+            idx = idx.unsqueeze(1).expand(-1, tgt_len, -1)
+        return idx
+
+    if training:
+        if not should_use_train_kernel(use_triton, Q):
+            return None
+        try:
+            token_idx = _token_idx()
+            key_mask = build_gather_key_mask(attention_mask, bsz, num_heads, tgt_len, token_idx)
+            return gather_attention_autograd(Q, K, V, token_idx, key_mask, scale=scale)
+        except Exception:
+            return None
+
     if not should_use_triton(use_triton, Q, training=training):
         return None
     try:
-        tgt_len = Q.size(1)
-        token_idx = indices
-        if token_idx.dim() == 2:
-            token_idx = token_idx.unsqueeze(1).expand(-1, tgt_len, -1)
-        key_mask = build_gather_key_mask(
-            attention_mask, bsz, num_heads, tgt_len, token_idx
-        )
+        token_idx = _token_idx()
+        key_mask = build_gather_key_mask(attention_mask, bsz, num_heads, tgt_len, token_idx)
         return sparse_gather_attention(Q, K, V, token_idx, key_mask, scale=scale)
     except Exception:
         return None

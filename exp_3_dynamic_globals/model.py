@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.bart.modeling_bart import BartAttention
 
-from shared.kernels import should_use_triton
+from shared.kernels import should_use_train_kernel, should_use_triton
 from shared.patched_model import classification_forward
 from shared.sparse_attn_utils import (
     dense_self_attention,
@@ -81,7 +81,9 @@ class DynamicGlobalAttention(BartAttention):
             # Inference fast path: merge globals + window into one gathered key set.
             # exp_3's sparse branch divides scores by sqrt(d) on top of the pre-scaled
             # Q, so pass scale=head_dim**-0.5 to stay equivalent to the PyTorch path.
-            if should_use_triton(self.use_triton, Q, training=self.training):
+            if should_use_triton(self.use_triton, Q, training=self.training) or (
+                self.training and should_use_train_kernel(self.use_triton, Q)
+            ):
                 q_pos_k = torch.arange(tgt_len, device=Q.device).view(1, -1, 1)
                 col_off_k = torch.arange(w, device=Q.device).view(1, 1, -1) - half
                 win_pos_k = (q_pos_k + col_off_k).clamp(0, src_len - 1).expand(BH, -1, -1)

@@ -122,6 +122,28 @@ for exp in 5 6 7 8 9 10 11 12; do
 done
 ```
 
+## Accelerated Kernels (training + torch.compile)
+
+Two opt-in accelerators for training/eval:
+
+- `BIGGER_BIRD_TRAIN_KERNELS=1` — use the autograd-capable Triton **gather** kernel
+  on the training compute path (applies to exp 3, 5, 9; CUDA only, and only when the
+  sparse branch is active, i.e. `--seq` larger than the experiment's key count).
+  Off by default; inference already uses the forward-only fused kernels.
+- `--compile` (or `BIGGER_BIRD_TORCH_COMPILE=1`) — wrap the model in `torch.compile`.
+  Compiles cleanly; speedup is hardware/model dependent (roughly neutral on small GPUs).
+
+```bash
+# Training gather kernel + torch.compile (exp 5)
+BIGGER_BIRD_TRAIN_KERNELS=1 python run_experiment.py --exp 5 --size medium --compile
+
+# Training gather kernel only (drop --compile if it doesn't help on your GPU)
+BIGGER_BIRD_TRAIN_KERNELS=1 python run_experiment.py --exp 5 --size small
+```
+
+> The training gather kernel does not apply attention dropout; this is safe because
+> BART-base uses `attention_dropout=0.0`.
+
 ## Saving & Reloading Weights
 
 Pass `--save-weights` to persist the model after training:

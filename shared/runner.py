@@ -144,6 +144,7 @@ class TrainConfig:
     weight_decay: float = 0.01
     warmup_ratio: float = 0.10
     use_cpu: bool = False
+    torch_compile: bool = False
 
 def preprocess_logits_for_metrics(logits, labels):
     if isinstance(logits, (tuple, list)):
@@ -166,7 +167,13 @@ def device_flags(force_cpu=False):
     bf16 = False
     torch_compile = False
     if use_cuda:
-        bf16 = torch.cuda.is_bf16_supported()
+        # Only use bf16 when the GPU supports it *natively* (Ampere+, compute
+        # capability >= 8.0). On pre-Ampere cards torch.cuda.is_bf16_supported()
+        # can return True via slow emulation, which also makes torch.compile skip
+        # bf16 nodes ("does not support bfloat16 compilation natively"). Prefer
+        # fp16 there instead.
+        major, _ = torch.cuda.get_device_capability()
+        bf16 = major >= 8 and torch.cuda.is_bf16_supported()
         fp16 = not bf16
     return fp16, bf16, torch_compile, use_mps
 
@@ -188,8 +195,16 @@ class TrajectoryCallback(TrainerCallback):
             self.trajectory.append(point)
 
 def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_meta: dict = None, callbacks=None, save_weights: bool = False):
-    fp16, bf16, torch_compile, use_mps = device_flags(force_cpu=cfg.use_cpu)
+    fp16, bf16, _torch_compile_default, use_mps = device_flags(force_cpu=cfg.use_cpu)
     eval_accum = 1 if use_mps else 8
+
+    # torch.compile: opt-in via TrainConfig or env BIGGER_BIRD_TORCH_COMPILE=1.
+    # Generates fused kernels across the whole graph (LayerNorm, FFN, attention
+    # epilogues). Data-dependent gather/top-k paths will graph-break gracefully.
+    env_compile = os.environ.get("BIGGER_BIRD_TORCH_COMPILE", "0").lower() in ("1", "true", "yes", "on")
+    torch_compile = bool(cfg.torch_compile or env_compile) and not cfg.use_cpu
+    if torch_compile:
+        print(f"[{exp_name}] torch.compile: ENABLED")
     
     out_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "benchmarks", exp_name))
     os.makedirs(out_dir, exist_ok=True)
