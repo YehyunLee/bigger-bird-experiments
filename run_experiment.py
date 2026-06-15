@@ -35,6 +35,7 @@ from exp_9_attn_specul.model import PatchedModel as AttnSpeculModel
 from exp_10_gqa_sparse.model import PatchedModel as GQASparseModel
 from exp_11_nsa.model import PatchedModel as NSAModel
 from exp_12_s2_hhst.model import PatchedModel as S2HHSTModel
+from exp_13_dynamic_context.model import PatchedModel as DynamicContextModel
 
 # Compute presets
 COMPUTE_CONFIGS = {
@@ -126,6 +127,11 @@ EXPERIMENT_CONFIGS = {
         S2HHSTModel,
         {"shard_size": 32, "local_blocks": 2, "stride_blocks": 16, "use_sink": True, "dense_layers": [0]},
     ),
+    13: (
+        "exp_13_dynamic_context",
+        DynamicContextModel,
+        {"drop_after_layer": 3, "target_budget": 4096, "chunk_size": 8192},
+    ),
 }
 
 def main():
@@ -148,8 +154,8 @@ Examples:
         """
     )
     
-    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10,11,12],
-                       help="Experiment number (0=baseline, 1-4=original sparse methods, 5-10=new hybrid/advanced ideas, 11=NSA, 12=S2-HHST)")
+    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13],
+                       help="Experiment number (0=baseline, 1-4=original sparse methods, 5-10=new hybrid/advanced ideas, 11=NSA, 12=S2-HHST, 13=Dynamic Context)")
     parser.add_argument("--size", type=str, choices=["small", "medium", "big", "xl", "long"],
                        help="Compute size preset")
     parser.add_argument("--list", action="store_true",

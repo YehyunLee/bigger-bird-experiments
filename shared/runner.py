@@ -69,6 +69,22 @@ def _compute_softmax_comparisons(seq_len, model, extra_meta):
         late = (n_layers - dal) * n_heads * late_len * late_len
         return int(early + late)
 
+    # Exp 13: Dynamic Context Window — fixed token budget after drop_after_layer
+    if "drop_after_layer" in meta and "target_budget" in meta:
+        dal = meta["drop_after_layer"]
+        budget = meta["target_budget"]
+        chunk_size = meta.get("chunk_size", 8192)
+        # Early layers: if seq_len > chunk_size, chunks run independently
+        if seq_len > chunk_size:
+            num_chunks = (seq_len + chunk_size - 1) // chunk_size
+            # Each chunk processes chunk_size tokens with full self-attention
+            early = dal * n_heads * num_chunks * chunk_size * chunk_size
+        else:
+            early = dal * n_heads * seq_len * seq_len
+        # Late layers: full attention over the fixed budget (always <= seq_len)
+        late = (n_layers - dal) * n_heads * budget * budget
+        return int(early + late)
+
     # Exp 9: Attention Speculation — window + anchors per query
     if "window_size" in meta and "num_anchors" in meta:
         M = meta["window_size"] + meta["num_anchors"]

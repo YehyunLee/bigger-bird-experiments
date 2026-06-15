@@ -17,7 +17,7 @@ Standard sparse attention models, such as Big Bird and Longformer, utilize fixed
 3.  **Content-Aware Dynamic Globals (exp_3_dynamic_globals)**: Learned gate picks **G=16 global tokens per batch**; local context via sliding window (`W=64`); single softmax over **G + W** keys. Defaults: `window_size=64`, `num_globals=16`.
 4.  **Permuted Block-Sparse Attention (exp_4_pbs_attn)**: Head-shared block routing, **sorted** token indices for coalesced GPU reads, sparse softmax on **M×block_size** tokens. Defaults: `block_size=64`, `num_blocks=2` (128 keys).
 
-### Advanced Hybrid / Diverging Ideas (exp 5-10)
+### Advanced Hybrid / Diverging Ideas (exp 5-13)
 
 5.  **Bigger Bird — Unified (exp_5_bigger_bird)**: Reimplements the **original proposal**: three components combined in a single attention module — (i) diversity-aware local top-k via MMR-lite, (ii) submodular-style global token selection via learned gate, (iii) biased random "teleports" mixing high-gate candidates with uniform random. Selects only `local_k + globals + teleports` keys per query.
 6.  **DeepSeek + PBS Hybrid (exp_6_deepseek_pbs)**: Combines content-aware routing with GPU-friendly block coalescing. Low-rank Q/K projections identify the top-M most-relevant blocks (PBS-style), then top-K tokens are selected *within* those blocks. Selected indices are sorted to guarantee contiguous memory reads.
@@ -25,6 +25,9 @@ Standard sparse attention models, such as Big Bird and Longformer, utilize fixed
 8.  **Token Dropping (exp_8_token_drop)**: Diverges from sparse attention entirely. After 3 dense layers extract local features, computes token importance (L2 norm of hidden state) and **drops the bottom 30%**. Subsequent layers process a shorter sequence — attention cost drops quadratically with `keep_ratio²`.
 9.  **Attention Speculation (exp_9_attn_specul)**: Inspired by speculative decoding. Every layer runs a *fast path* (window + first/middle/last anchors). Every 4th layer also computes the *full* attention as a verifier and adds a KL distillation loss, teaching the fast path to mimic full attention during training. At inference, only the fast path runs.
 10. **GQA + Sparse Routing (exp_10_gqa_sparse)**: Stacks two memory wins from the DeepSeek-V3 playbook. (a) Grouped-Query Attention compresses 12 K/V heads into 4 KV groups via mean pooling — 3× memory reduction. (b) Top-K sparse routing on top — softmax cost drops from O(N) to O(K) per query.
+11. **Native Sparse Attention — NSA (exp_11_nsa)**: TODO
+12. **S2-HHST (exp_12_s2_hhst)**: TODO
+13. **Dynamic Context Window (exp_13_dynamic_context)**: Builds on Token Drop to accept **arbitrarily long inputs** by capping the post-early-layer attention to a fixed token budget. After `drop_after_layer` dense layers, tokens are scored by hidden-state L2 norm and exactly `target_budget` tokens are kept — regardless of input length (4k, 100k, 1M). For very long inputs (> chunk_size), early layers run in independent chunks so the full O(n²) attention matrix never materialises. Late layers always run on the fixed budget, giving O(budget²) attention cost. Defaults: `drop_after_layer=3`, `target_budget=4096`, `chunk_size=8192`.
 
 ## Architecture Diagrams
 
@@ -220,6 +223,58 @@ Input ──► Q, K, V [shape: BH, T, d]
 **Complexity**: O(n_blocks × B + n × M × B × d) ≈ O(n) for fixed M, B. `M` scales with sequence length via `_effective_num_blocks`.
 
 **Hardware Benefit**: Sorted indices + block-aligned gathers improve memory coalescing vs random per-token sparsity.
+
+---
+
+### Experiment 13: Dynamic Context Window
+
+**Key Innovation**: Fixed-token-budget dropping with chunked early layers for unbounded input length.
+
+> **Analogy:** A journalist covering a city-wide protest can't interview every single person. Instead, they send reporters to every neighborhood (chunks), each reporter takes notes on the most vocal 10 people in their area. Then the editor-in-chief picks the top 50 most important voices city-wide. The final article only quotes those 50 people — regardless of whether 500 or 50,000 people attended.
+
+```
+Input (any length N)
+       │
+       ▼
+┌─────────────────────────────┐
+│ Embedding + Positions       │  ◄── O(N) — cheap
+│ [B, N, D]                   │
+└─────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ PATH A: N ≤ chunk_size      │
+│   Full early layers 0..L-1  │  ◄── O(N²) attention (dense)
+│ PATH B: N > chunk_size      │
+│   Split into chunks         │
+│   Run early layers per chunk│  ◄── O(num_chunks × chunk²)
+│   Concatenate outputs       │
+└─────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ Score all tokens globally   │
+│ Importance = ||h||₂         │
+│ Keep top target_budget      │  ◄── budget is FIXED (e.g. 4096)
+└─────────────────────────────┘
+       │
+       ▼
+┌─────────────────────────────┐
+│ Late layers L..end          │
+│ Attention over budget tokens│  ◄── O(budget²) always
+│ Same cost for 4k or 1M input│
+└─────────────────────────────┘
+       │
+       ▼
+   [Classification]
+```
+
+**Complexity**: 
+- Early: O(num_chunks × chunk_size²) when chunked, O(N²) when short
+- Late: O(budget²) — **independent of input length**
+- Total: O(N + budget²) for long sequences, dominated by O(budget²)
+
+**Key property**: Input of 4,096 → keep 4,096 tokens. Input of 100,000 → still keep 4,096 tokens. Input of 1,000,000 → still keep 4,096 tokens.
 
 ---
 
