@@ -6,6 +6,7 @@ from transformers.models.bart.modeling_bart import BartAttention
 from shared.patched_model import classification_forward
 from shared.sparse_attn_utils import (
     dense_self_attention,
+    sdpa_head_shared_or_none,
     sparse_attention_head_shared,
     token_mask_1d,
 )
@@ -17,7 +18,7 @@ def _effective_num_blocks(num_blocks: int, seq_len: int, block_size: int) -> int
 
 
 class PBSAttention(BartAttention):
-    def __init__(self, base_attn: BartAttention, block_size: int = 32, num_blocks: int = 4):
+    def __init__(self, base_attn: BartAttention, block_size: int = 32, num_blocks: int = 4, use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -31,6 +32,7 @@ class PBSAttention(BartAttention):
         self.out_proj.load_state_dict(base_attn.out_proj.state_dict())
         self.block_size = block_size
         self.num_blocks = num_blocks
+        self.use_triton = use_triton
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -89,9 +91,14 @@ class PBSAttention(BartAttention):
             top_idx = (base.unsqueeze(-1) + offs.view(1, 1, -1)).reshape(BH, M * self.block_size)
             top_idx, _ = torch.sort(top_idx, dim=-1)
 
-            out = sparse_attention_head_shared(
-                Q, K, V, top_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+            out = sdpa_head_shared_or_none(
+                Q, K, V, top_idx, attention_mask, bsz, self.num_heads,
+                self.use_triton, self.training,
             )
+            if out is None:
+                out = sparse_attention_head_shared(
+                    Q, K, V, top_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+                )
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
             bsz, tgt_len, self.embed_dim
@@ -100,13 +107,13 @@ class PBSAttention(BartAttention):
         return (attn_output, None)
 
 
-def patch_bart(model: nn.Module, block_size: int = 32, num_blocks: int = 4):
+def patch_bart(model: nn.Module, block_size: int = 32, num_blocks: int = 4, use_triton: bool = True):
     def _recurse(module: nn.Module):
         for name, child in list(module.named_children()):
             if isinstance(child, BartAttention):
                 if getattr(child, "is_decoder", False):
                     continue
-                setattr(module, name, PBSAttention(child, block_size, num_blocks))
+                setattr(module, name, PBSAttention(child, block_size, num_blocks, use_triton=use_triton))
             else:
                 _recurse(child)
 
@@ -114,10 +121,11 @@ def patch_bart(model: nn.Module, block_size: int = 32, num_blocks: int = 4):
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, block_size=32, num_blocks=4):
+    def __init__(self, base_model, block_size=32, num_blocks=4, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, block_size=block_size, num_blocks=num_blocks)
+        self.use_triton = use_triton
+        patch_bart(self.model, block_size=block_size, num_blocks=num_blocks, use_triton=use_triton)
 
     def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
         return classification_forward(self.model, input_ids, attention_mask, labels, **kwargs)

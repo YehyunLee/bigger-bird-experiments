@@ -7,13 +7,14 @@ from shared.sparse_attn_utils import (
     dense_self_attention,
     effective_top_k,
     head_shared_topk_indices,
+    sdpa_head_shared_or_none,
     sparse_attention_head_shared,
     token_mask_1d,
 )
 
 
 class DeepSeekTopKAttention(BartAttention):
-    def __init__(self, base_attn: BartAttention, top_k: int = 128, low_rank_dim: int = 16):
+    def __init__(self, base_attn: BartAttention, top_k: int = 128, low_rank_dim: int = 16, use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -27,6 +28,7 @@ class DeepSeekTopKAttention(BartAttention):
         self.out_proj.load_state_dict(base_attn.out_proj.state_dict())
         self.top_k = top_k
         self.low_rank_dim = low_rank_dim
+        self.use_triton = use_triton
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -76,9 +78,14 @@ class DeepSeekTopKAttention(BartAttention):
             topk_idx = head_shared_topk_indices(
                 Q_low, K_low, k_eff, token_mask, bsz, self.num_heads
             )
-            out = sparse_attention_head_shared(
-                Q, K, V, topk_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+            out = sdpa_head_shared_or_none(
+                Q, K, V, topk_idx, attention_mask, bsz, self.num_heads,
+                self.use_triton, self.training,
             )
+            if out is None:
+                out = sparse_attention_head_shared(
+                    Q, K, V, topk_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+                )
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
             bsz, tgt_len, self.embed_dim
@@ -87,13 +94,13 @@ class DeepSeekTopKAttention(BartAttention):
         return (attn_output, None)
 
 
-def patch_bart(model: nn.Module, top_k: int = 128, low_rank_dim: int = 16):
+def patch_bart(model: nn.Module, top_k: int = 128, low_rank_dim: int = 16, use_triton: bool = True):
     def _recurse(module: nn.Module):
         for name, child in list(module.named_children()):
             if isinstance(child, BartAttention):
                 if getattr(child, "is_decoder", False):
                     continue
-                setattr(module, name, DeepSeekTopKAttention(child, top_k, low_rank_dim))
+                setattr(module, name, DeepSeekTopKAttention(child, top_k, low_rank_dim, use_triton=use_triton))
             else:
                 _recurse(child)
 
@@ -101,10 +108,11 @@ def patch_bart(model: nn.Module, top_k: int = 128, low_rank_dim: int = 16):
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, top_k=128, low_rank_dim=16):
+    def __init__(self, base_model, top_k=128, low_rank_dim=16, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, top_k=top_k, low_rank_dim=low_rank_dim)
+        self.use_triton = use_triton
+        patch_bart(self.model, top_k=top_k, low_rank_dim=low_rank_dim, use_triton=use_triton)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):

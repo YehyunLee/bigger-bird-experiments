@@ -2,12 +2,96 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.modeling_outputs import SequenceClassifierOutput, BaseModelOutput
+from transformers.models.bart.modeling_bart import BartAttention
+
+from shared.sparse_attn_utils import dense_self_attention, sdpa_dense_or_none
 
 # Idea D: Token Dropping (Skip Layers)
 # After the EARLY layers extract local syntax, drop low-importance tokens for the
 # remaining (more expensive) layers. Importance is computed from the hidden-state
 # L2 norm (a cheap proxy for "this token is being attended to / carries signal").
 # Subsequent layers process a SHORTER sequence -> attention cost drops quadratically.
+
+
+class DenseKernelAttention(BartAttention):
+    """Standard full attention routed through F.scaled_dot_product_attention.
+
+    exp_8 keeps attention dense (every query attends to every key); the only
+    sparsity comes from dropping tokens between layers. Full attention is exactly
+    what torch SDPA (Flash / mem-efficient backends) is optimized for, so we use
+    it rather than a hand-written kernel. Inference-only with a PyTorch fallback.
+    """
+
+    def __init__(self, base_attn: BartAttention, use_triton: bool = True):
+        super().__init__(
+            embed_dim=base_attn.embed_dim,
+            num_heads=base_attn.num_heads,
+            dropout=base_attn.dropout.p if isinstance(base_attn.dropout, nn.Dropout) else float(base_attn.dropout),
+            is_decoder=base_attn.is_decoder,
+            bias=base_attn.k_proj.bias is not None,
+        )
+        self.q_proj.load_state_dict(base_attn.q_proj.state_dict())
+        self.k_proj.load_state_dict(base_attn.k_proj.state_dict())
+        self.v_proj.load_state_dict(base_attn.v_proj.state_dict())
+        self.out_proj.load_state_dict(base_attn.out_proj.state_dict())
+        self.use_triton = use_triton
+
+    def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
+        return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        key_value_states=None,
+        past_key_value=None,
+        attention_mask=None,
+        layer_head_mask=None,
+        output_attentions=False,
+        use_cache=False,
+        **kwargs,
+    ):
+        for k in ("cache_position", "position_bias", "alibi_bias"):
+            kwargs.pop(k, None)
+
+        is_cross_attention = key_value_states is not None
+        bsz, tgt_len, _ = hidden_states.size()
+
+        query_states = self.q_proj(hidden_states) * (self.head_dim ** -0.5)
+        if is_cross_attention:
+            key_states = self._shape(self.k_proj(key_value_states), -1, bsz)
+            value_states = self._shape(self.v_proj(key_value_states), -1, bsz)
+        else:
+            key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
+            value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
+
+        BH = bsz * self.num_heads
+        Q = self._shape(query_states, tgt_len, bsz).reshape(BH, tgt_len, self.head_dim)
+        K = key_states.reshape(BH, -1, self.head_dim)
+        V = value_states.reshape(BH, -1, self.head_dim)
+
+        out = sdpa_dense_or_none(
+            Q, K, V, attention_mask, bsz, self.num_heads, self.use_triton, self.training
+        )
+        if out is None:
+            out = dense_self_attention(
+                Q, K, V, attention_mask, bsz, self.num_heads, self.dropout, self.training
+            )
+
+        attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
+            bsz, tgt_len, self.embed_dim
+        )
+        return (self.out_proj(attn_output), None)
+
+
+def patch_dense_kernel(encoder: nn.Module, use_triton: bool = True):
+    """Replace each encoder layer's self-attention with the fused dense kernel path."""
+    layers = getattr(encoder, "layers", None)
+    if layers is None:
+        return
+    for layer in layers:
+        sa = getattr(layer, "self_attn", None)
+        if isinstance(sa, BartAttention) and not getattr(sa, "is_decoder", False):
+            layer.self_attn = DenseKernelAttention(sa, use_triton=use_triton)
 
 
 class TokenDropEncoder(nn.Module):
@@ -17,11 +101,12 @@ class TokenDropEncoder(nn.Module):
     At depth = drop_after_layer: rank tokens by importance, keep top (1 - drop_ratio).
     Remaining layers run on the smaller sequence.
     """
-    def __init__(self, encoder: nn.Module, drop_after_layer: int = 3, drop_ratio: float = 0.3):
+    def __init__(self, encoder: nn.Module, drop_after_layer: int = 3, drop_ratio: float = 0.3, use_triton: bool = True):
         super().__init__()
         self.encoder = encoder
         self.drop_after_layer = drop_after_layer
         self.drop_ratio = drop_ratio
+        patch_dense_kernel(encoder, use_triton=use_triton)
 
     def forward(self, input_ids=None, attention_mask=None, return_dict=True, **kwargs):
         bsz, seq_len = input_ids.shape
@@ -84,12 +169,13 @@ class AttnPool(nn.Module):
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, drop_after_layer: int = 3, drop_ratio: float = 0.3):
+    def __init__(self, base_model, drop_after_layer: int = 3, drop_ratio: float = 0.3, use_triton: bool = True):
         super().__init__()
         self.model = base_model
+        self.use_triton = use_triton
         # Wrap the encoder
         encoder = base_model.model.encoder
-        self.token_drop_encoder = TokenDropEncoder(encoder, drop_after_layer=drop_after_layer, drop_ratio=drop_ratio)
+        self.token_drop_encoder = TokenDropEncoder(encoder, drop_after_layer=drop_after_layer, drop_ratio=drop_ratio, use_triton=use_triton)
         hidden = getattr(self.model.config, "hidden_size", None) or getattr(self.model.config, "d_model")
         self.attn_pool = AttnPool(hidden)
         self.drop_after_layer = drop_after_layer

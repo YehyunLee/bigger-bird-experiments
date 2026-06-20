@@ -5,6 +5,7 @@ from transformers.models.bart.modeling_bart import BartAttention
 from transformers.modeling_outputs import SequenceClassifierOutput
 
 from shared.patched_model import classification_forward
+from shared.sparse_attn_utils import gather_attention_triton_or_none
 
 # Idea E: Attention Speculation
 # Inspired by speculative decoding: run a CHEAP attention path first, and a
@@ -21,7 +22,8 @@ class AttnSpeculAttention(BartAttention):
                  window_size: int = 64,
                  num_anchors: int = 4,
                  verify: bool = False,
-                 verify_kl_weight: float = 0.1):
+                 verify_kl_weight: float = 0.1,
+                 use_triton: bool = True):
         super().__init__(
             embed_dim=base_attn.embed_dim,
             num_heads=base_attn.num_heads,
@@ -37,6 +39,7 @@ class AttnSpeculAttention(BartAttention):
         self.num_anchors = num_anchors
         self.verify = verify
         self.verify_kl_weight = verify_kl_weight
+        self.use_triton = use_triton
         self.last_kl = None  # populated when verify=True
 
     def _shape(self, tensor, seq_len, bsz):
@@ -87,25 +90,30 @@ class AttnSpeculAttention(BartAttention):
         abs_idx_bh = abs_idx.unsqueeze(0).expand(BH, tgt_len, abs_idx.size(-1))
         M = abs_idx_bh.size(-1)
 
-        # --- Fast path: gather + softmax ---
-        idx_g = abs_idx_bh.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
-        K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
-        V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
-        scores_fast = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2)
+        # --- Fast path: gather + softmax (fused Triton at inference) ---
+        out_fast = gather_attention_triton_or_none(
+            Q, K, V, abs_idx_bh, attention_mask, bsz, self.num_heads,
+            self.use_triton, self.training,
+        )
+        if out_fast is None:
+            idx_g = abs_idx_bh.unsqueeze(-1).expand(-1, -1, -1, self.head_dim)
+            K_sel = torch.gather(K.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
+            V_sel = torch.gather(V.unsqueeze(1).expand(BH, tgt_len, src_len, self.head_dim), 2, idx_g)
+            scores_fast = torch.matmul(Q.unsqueeze(2), K_sel.transpose(-1, -2)).squeeze(2)
 
-        if attention_mask is not None:
-            am = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
-            if am.dim() == 4: am = am[:, 0, 0, :]
-            am_bh = am.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, src_len)
-            allowed = torch.gather(am_bh.unsqueeze(1).expand(BH, tgt_len, src_len), 2, abs_idx_bh)
-            scores_fast = scores_fast.masked_fill(~allowed, -1e9)
+            if attention_mask is not None:
+                am = attention_mask if attention_mask.dtype == torch.bool else (attention_mask > -1e-8)
+                if am.dim() == 4: am = am[:, 0, 0, :]
+                am_bh = am.unsqueeze(1).expand(bsz, self.num_heads, src_len).reshape(BH, src_len)
+                allowed = torch.gather(am_bh.unsqueeze(1).expand(BH, tgt_len, src_len), 2, abs_idx_bh)
+                scores_fast = scores_fast.masked_fill(~allowed, -1e9)
 
-        attn_fast = F.softmax(scores_fast, dim=-1)
-        attn_fast = F.dropout(attn_fast, p=self.dropout, training=self.training)
-        out_fast = torch.bmm(
-            attn_fast.reshape(BH * tgt_len, 1, M),
-            V_sel.reshape(BH * tgt_len, M, self.head_dim)
-        ).reshape(BH, tgt_len, self.head_dim)
+            attn_fast = F.softmax(scores_fast, dim=-1)
+            attn_fast = F.dropout(attn_fast, p=self.dropout, training=self.training)
+            out_fast = torch.bmm(
+                attn_fast.reshape(BH * tgt_len, 1, M),
+                V_sel.reshape(BH * tgt_len, M, self.head_dim)
+            ).reshape(BH, tgt_len, self.head_dim)
 
         # --- Verifier path (training-only, on verify layers) ---
         if self.verify and self.training:
@@ -127,7 +135,7 @@ class AttnSpeculAttention(BartAttention):
         return (self.out_proj(attn_output), None)
 
 
-def patch_bart(model: nn.Module, window_size=64, num_anchors=4, verify_every=4, verify_kl_weight=0.1):
+def patch_bart(model: nn.Module, window_size=64, num_anchors=4, verify_every=4, verify_kl_weight=0.1, use_triton=True):
     encoder = getattr(model, "model", model)
     if hasattr(encoder, "encoder"):
         encoder = encoder.encoder
@@ -138,16 +146,19 @@ def patch_bart(model: nn.Module, window_size=64, num_anchors=4, verify_every=4, 
         sa = layer.self_attn
         verify = (i % verify_every == 0)
         layer.self_attn = AttnSpeculAttention(sa, window_size=window_size, num_anchors=num_anchors,
-                                              verify=verify, verify_kl_weight=verify_kl_weight)
+                                              verify=verify, verify_kl_weight=verify_kl_weight,
+                                              use_triton=use_triton)
     return len(layers)
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, window_size=64, num_anchors=4, verify_every=4, verify_kl_weight=0.1):
+    def __init__(self, base_model, window_size=64, num_anchors=4, verify_every=4, verify_kl_weight=0.1, use_triton=True):
         super().__init__()
         self.model = base_model
+        self.use_triton = use_triton
         patch_bart(self.model, window_size=window_size, num_anchors=num_anchors,
-                   verify_every=verify_every, verify_kl_weight=verify_kl_weight)
+                   verify_every=verify_every, verify_kl_weight=verify_kl_weight,
+                   use_triton=use_triton)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):

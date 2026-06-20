@@ -7,6 +7,7 @@ from shared.sparse_attn_utils import (
     dense_self_attention,
     effective_top_k,
     head_shared_topk_indices,
+    sdpa_head_shared_or_none,
     sparse_attention_head_shared,
     token_mask_1d,
 )
@@ -19,6 +20,7 @@ class LayerAdaptiveAttention(BartAttention):
         top_k: int = 64,
         low_rank_dim: int = 16,
         layer_idx: int = -1,
+        use_triton: bool = True,
     ):
         super().__init__(
             embed_dim=base_attn.embed_dim,
@@ -34,6 +36,7 @@ class LayerAdaptiveAttention(BartAttention):
         self.top_k = top_k
         self.low_rank_dim = low_rank_dim
         self.layer_idx = layer_idx
+        self.use_triton = use_triton
 
     def _shape(self, tensor, seq_len, bsz):
         return tensor.reshape(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -81,9 +84,14 @@ class LayerAdaptiveAttention(BartAttention):
             topk_idx = head_shared_topk_indices(
                 Q_low, K_low, k_eff, token_mask, bsz, self.num_heads
             )
-            out = sparse_attention_head_shared(
-                Q, K, V, topk_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+            out = sdpa_head_shared_or_none(
+                Q, K, V, topk_idx, attention_mask, bsz, self.num_heads,
+                self.use_triton, self.training,
             )
+            if out is None:
+                out = sparse_attention_head_shared(
+                    Q, K, V, topk_idx, self.dropout, self.training, token_mask, bsz, self.num_heads
+                )
 
         attn_output = out.view(bsz, self.num_heads, tgt_len, self.head_dim).transpose(1, 2).reshape(
             bsz, tgt_len, self.embed_dim
@@ -100,7 +108,7 @@ def _schedule(layer_idx: int, n_layers: int, k_early: int, k_mid: int, k_late: i
     return k_late
 
 
-def patch_bart(model: nn.Module, k_early=192, k_mid=64, k_late=32, low_rank_dim=16, n_layers_hint=12):
+def patch_bart(model: nn.Module, k_early=192, k_mid=64, k_late=32, low_rank_dim=16, n_layers_hint=12, use_triton=True):
     encoder = getattr(model, "model", model)
     if hasattr(encoder, "encoder"):
         encoder = encoder.encoder
@@ -116,7 +124,7 @@ def patch_bart(model: nn.Module, k_early=192, k_mid=64, k_late=32, low_rank_dim=
                     setattr(
                         m,
                         nm,
-                        LayerAdaptiveAttention(c, top_k=k, low_rank_dim=low_rank_dim, layer_idx=idx_holder["i"]),
+                        LayerAdaptiveAttention(c, top_k=k, low_rank_dim=low_rank_dim, layer_idx=idx_holder["i"], use_triton=use_triton),
                     )
                     idx_holder["i"] += 1
                 else:
@@ -129,16 +137,17 @@ def patch_bart(model: nn.Module, k_early=192, k_mid=64, k_late=32, low_rank_dim=
     for i, layer in enumerate(layers):
         k = _schedule(i, n, k_early, k_mid, k_late)
         layer.self_attn = LayerAdaptiveAttention(
-            layer.self_attn, top_k=k, low_rank_dim=low_rank_dim, layer_idx=i
+            layer.self_attn, top_k=k, low_rank_dim=low_rank_dim, layer_idx=i, use_triton=use_triton
         )
     return n
 
 
 class PatchedModel(nn.Module):
-    def __init__(self, base_model, k_early=192, k_mid=64, k_late=32, low_rank_dim=16):
+    def __init__(self, base_model, k_early=192, k_mid=64, k_late=32, low_rank_dim=16, use_triton=True):
         super().__init__()
         self.model = base_model
-        patch_bart(self.model, k_early=k_early, k_mid=k_mid, k_late=k_late, low_rank_dim=low_rank_dim)
+        self.use_triton = use_triton
+        patch_bart(self.model, k_early=k_early, k_mid=k_mid, k_late=k_late, low_rank_dim=low_rank_dim, use_triton=use_triton)
 
     def gradient_checkpointing_enable(self, **kwargs):
         if hasattr(self.model, "gradient_checkpointing_enable"):
