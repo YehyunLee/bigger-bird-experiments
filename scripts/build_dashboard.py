@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import glob
 import json
 import re
 from pathlib import Path
@@ -25,6 +24,13 @@ def round_val(value, places=3):
     return value
 
 
+def seq_from_eval(meta: dict) -> int | None:
+    mc = meta.get("model_config", {})
+    ds = meta.get("dataset_info", {})
+    seq = mc.get("seq_length") or ds.get("max_seq_len")
+    return int(seq) if seq else None
+
+
 def load_csv_rows() -> list[dict]:
     rows = []
     for path in sorted(ROOT.glob("benchmarks/**/eval_*.json")):
@@ -35,15 +41,15 @@ def load_csv_rows() -> list[dict]:
         ev = perf.get("eval", {})
         train = perf.get("train", {})
         ds = meta.get("dataset_info", {})
-        mc = meta.get("model_config", {})
         env = meta.get("environment", {})
         name = meta.get("name", path.parent.name)
         ts = meta.get("timestamp", path.stem.replace("eval_", ""))
-        train_samples = mc.get("train_samples") or ds.get("train_size")
+        train_samples = meta.get("model_config", {}).get("train_samples") or ds.get("train_size")
         rows.append(
             {
                 "Experiment": name,
                 "Timestamp": ts,
+                "Seq_Length": seq_from_eval(meta),
                 "Train_Samples": train_samples,
                 "F1": round_val(ev.get("eval_f1")),
                 "Accuracy": round_val(ev.get("eval_accuracy")),
@@ -62,62 +68,137 @@ def load_csv_rows() -> list[dict]:
     return rows
 
 
+def _efficiency_row(
+    *,
+    exp_name: str,
+    exp_n: int,
+    seq_length: int,
+    f1,
+    accuracy,
+    train_time_s,
+    peak_memory_mb,
+    inference_latency_ms,
+    softmax_comparisons,
+    oom: bool,
+) -> dict:
+    return {
+        "exp_name": exp_name,
+        "exp_num": exp_n,
+        "seq_length": seq_length,
+        "f1": round_val(f1),
+        "accuracy": round_val(accuracy),
+        "train_time_s": round_val(train_time_s, 2),
+        "peak_memory_mb": round_val(peak_memory_mb, 2),
+        "inference_latency_ms": round_val(inference_latency_ms, 2),
+        "softmax_comparisons": softmax_comparisons,
+        "oom": oom,
+    }
+
+
 def load_efficiency() -> list[dict]:
+    """Merge efficiency_results, eval JSONs, and long-context sweep files."""
+    merged: dict[tuple[int, int], tuple[dict, int, str]] = {}
+
+    def put(row: dict, priority: int, ts: str = "") -> None:
+        key = (row["exp_num"], row["seq_length"])
+        cur = merged.get(key)
+        if cur is None:
+            merged[key] = (row, priority, ts)
+            return
+        cur_row, cur_pri, cur_ts = cur
+        if priority < cur_pri:
+            merged[key] = (row, priority, ts)
+            return
+        if priority > cur_pri:
+            return
+        # Same priority: prefer successful runs, then newer timestamp.
+        if cur_row.get("oom") and not row.get("oom"):
+            merged[key] = (row, priority, ts)
+            return
+        if row.get("oom") and not cur_row.get("oom"):
+            return
+        if ts > cur_ts:
+            merged[key] = (row, priority, ts)
+
     with open(ROOT / "benchmarks/efficiency_results.json") as f:
-        eff_data = json.load(f)
+        for row in json.load(f)["results"]:
+            put(
+                _efficiency_row(
+                    exp_name=row["exp_name"],
+                    exp_n=row["exp_num"],
+                    seq_length=row["seq_length"],
+                    f1=row.get("f1"),
+                    accuracy=row.get("accuracy"),
+                    train_time_s=row.get("train_time_s"),
+                    peak_memory_mb=row.get("peak_memory_mb"),
+                    inference_latency_ms=row.get("inference_latency_ms"),
+                    softmax_comparisons=row.get("softmax_comparisons"),
+                    oom=row.get("oom", False),
+                ),
+                priority=2,
+            )
 
-    efficiency = []
-    for row in eff_data["results"]:
-        efficiency.append(
-            {
-                "exp_name": row["exp_name"],
-                "exp_num": row["exp_num"],
-                "seq_length": row["seq_length"],
-                "f1": round_val(row.get("f1")),
-                "accuracy": round_val(row.get("accuracy")),
-                "train_time_s": round_val(row.get("train_time_s"), 2),
-                "peak_memory_mb": round_val(row.get("peak_memory_mb"), 2),
-                "inference_latency_ms": round_val(row.get("inference_latency_ms"), 2),
-                "softmax_comparisons": row.get("softmax_comparisons"),
-                "oom": row.get("oom", False),
-            }
-        )
-
-    existing = {(e["exp_num"], e["seq_length"]) for e in efficiency}
-    for path in ROOT.glob("benchmarks/exp_1[123]_*/eval_*.json"):
+    for path in ROOT.glob("benchmarks/**/eval_*.json"):
         with open(path) as f:
             data = json.load(f)
         meta = data["experiment_metadata"]
-        perf = data["performance_metrics"]
+        perf = data.get("performance_metrics", {})
         ev = perf.get("eval", {})
+        seq = seq_from_eval(meta)
+        if not seq:
+            continue
         name = meta["name"]
         num = exp_num(name)
-        seq = meta.get("model_config", {}).get("seq_length")
-        if seq not in (1024, 2048, 4096):
-            continue
-        key = (num, seq)
-        if key in existing:
-            continue
-        efficiency.append(
-            {
-                "exp_name": name,
-                "exp_num": num,
-                "seq_length": seq,
-                "f1": round_val(ev.get("eval_f1")),
-                "accuracy": round_val(ev.get("eval_accuracy")),
-                "train_time_s": round_val(perf.get("training_time_seconds"), 2),
-                "peak_memory_mb": round_val(
-                    perf.get("peak_memory_mb")
-                    or meta.get("environment", {}).get("peak_memory_mb"),
-                    2,
-                ),
-                "inference_latency_ms": round_val(perf.get("inference_latency_ms"), 2),
-                "softmax_comparisons": perf.get("softmax_comparisons"),
-                "oom": False,
-            }
+        ts = meta.get("timestamp", path.stem.replace("eval_", ""))
+        put(
+            _efficiency_row(
+                exp_name=name,
+                exp_n=num,
+                seq_length=seq,
+                f1=ev.get("eval_f1"),
+                accuracy=ev.get("eval_accuracy"),
+                train_time_s=perf.get("training_time_seconds"),
+                peak_memory_mb=perf.get("peak_memory_mb")
+                or meta.get("environment", {}).get("peak_memory_mb"),
+                inference_latency_ms=perf.get("inference_latency_ms"),
+                softmax_comparisons=perf.get("softmax_comparisons"),
+                oom=False,
+            ),
+            priority=1,
+            ts=ts,
         )
-        existing.add(key)
 
+    for path in sorted(ROOT.glob("benchmarks/long_context_sweep*.json")):
+        with open(path) as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict) or "results" not in payload:
+            continue
+        ts = payload.get("config", {}).get("timestamp", path.stem)[:19].replace("-", "").replace(":", "").replace("T", "_")
+        for row in payload["results"]:
+            seq = row.get("seq") or row.get("seq_length")
+            if not seq:
+                continue
+            exp_n = row.get("exp", row.get("exp_num"))
+            exp_name = row.get("exp_name") or f"exp_{exp_n}"
+            oom = row.get("oom", False)
+            put(
+                _efficiency_row(
+                    exp_name=exp_name,
+                    exp_n=exp_n,
+                    seq_length=int(seq),
+                    f1=row.get("f1"),
+                    accuracy=row.get("accuracy"),
+                    train_time_s=row.get("train_time_s"),
+                    peak_memory_mb=row.get("peak_mem_mb") or row.get("peak_memory_mb"),
+                    inference_latency_ms=row.get("inference_ms") or row.get("inference_latency_ms"),
+                    softmax_comparisons=row.get("softmax_comparisons"),
+                    oom=oom,
+                ),
+                priority=3,
+                ts=ts,
+            )
+
+    efficiency = [entry[0] for entry in merged.values()]
     efficiency.sort(key=lambda x: (x["seq_length"], x["exp_num"]))
     return efficiency
 
@@ -174,6 +255,7 @@ def patch_dashboard(html: str, complexity: dict, efficiency: list[dict], rows: l
         max(e["exp_num"] for e in efficiency),
         max(r["exp_num"] for r in complexity["results"]),
     )
+    eff_seqs = sorted({e["seq_length"] for e in efficiency})
 
     data_block = "\n".join(
         [
@@ -184,11 +266,12 @@ def patch_dashboard(html: str, complexity: dict, efficiency: list[dict], rows: l
             js_rows(rows),
             "",
             f"const MAX_EXP = {max_exp};",
+            f"const EFFICIENCY_SEQS = {js_object(eff_seqs)};",
         ]
     )
 
     html = re.sub(
-        r"const COMPLEXITY = \{.*?const CSV_ROWS = \[.*?\];\n*(?:const MAX_EXP = \d+;\n*)?",
+        r"const COMPLEXITY = \{.*?const CSV_ROWS = \[.*?\];\n*(?:const MAX_EXP = \d+;\n*)?(?:const EFFICIENCY_SEQS = \[.*?\];\n*)?",
         data_block + "\n",
         html,
         count=1,
@@ -196,12 +279,6 @@ def patch_dashboard(html: str, complexity: dict, efficiency: list[dict], rows: l
     )
 
     html = html.replace("for(let e=0;e<=10;e++)", "for(let e=0;e<=MAX_EXP;e++)")
-    html = re.sub(
-        r'<div class="stat"><div class="val">\d+</div><div class="lbl">Experiments \(exp 0–\d+\)</div></div>',
-        f'<div class="stat"><div class="val">{max_exp + 1}</div><div class="lbl">Experiments (exp 0–{max_exp})</div></div>',
-        html,
-        count=1,
-    )
 
     return html
 
@@ -213,9 +290,11 @@ def main() -> None:
     html = DASHBOARD.read_text()
     html = patch_dashboard(html, complexity, efficiency, rows)
     DASHBOARD.write_text(html)
+    seqs = sorted({e["seq_length"] for e in efficiency})
     print(f"Updated {DASHBOARD}")
     print(f"  CSV rows: {len(rows)}")
     print(f"  Efficiency rows: {len(efficiency)}")
+    print(f"  Efficiency seq lengths: {seqs}")
     print(f"  Complexity rows: {len(complexity['results'])}")
 
 
