@@ -199,7 +199,7 @@ def plot_depth_heatmap(rows, out_dir=None, baseline_exp="exp_0_baseline"):
 def main():
     rows = load_ruler_results()
     if not rows:
-        print("No RULER results found. Run run_ruler_experiment.py / run_ruler_sweep.py first.")
+        print("No RULER results found. Run python -m eval.ruler.run or eval.ruler.sweep first.")
         sys.exit(1)
     print(f"Loaded {len(rows)} RULER result(s).")
     print_depth_table(rows)

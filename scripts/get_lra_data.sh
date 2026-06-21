@@ -44,4 +44,4 @@ echo "      $RETR_DIR/aan_texts.tsv                (rows of '<paper_id>\\t<text>
 echo
 
 echo "Once both pieces are in place, run e.g.:"
-echo "  python run_lra_experiment.py --task retrieval --exp 0 --seq 4096 --data-dir '$RETR_DIR'"
+echo "  python -m eval.lra.run --task retrieval --exp 0 --seq 4096 --data-dir '$RETR_DIR'"

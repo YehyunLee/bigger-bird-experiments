@@ -343,7 +343,7 @@ def plot_sweep_efficiency(sweep_path=None, out_dir=None):
 def main():
     rows = load_lra_results()
     if not rows:
-        print("No LRA results found. Run run_lra_experiment.py / run_lra_sweep.py first.")
+        print("No LRA results found. Run python -m eval.lra.run or eval.lra.sweep first.")
         sys.exit(1)
     print(f"Loaded {len(rows)} LRA result(s).")
     print_retention_table(rows)
