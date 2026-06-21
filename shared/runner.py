@@ -1,10 +1,17 @@
 import torch
 import os
 import time
+import numpy as np
 import psutil
 from dataclasses import dataclass
 from sklearn.metrics import accuracy_score, f1_score
-from transformers import Trainer, TrainingArguments, DataCollatorWithPadding, TrainerCallback
+from transformers import (
+    Trainer,
+    TrainingArguments,
+    DataCollatorWithPadding,
+    TrainerCallback,
+    default_data_collator,
+)
 from transformers.trainer_utils import EvalPrediction
 import json
 from datetime import datetime
@@ -34,9 +41,11 @@ def _compute_softmax_comparisons(seq_len, model, extra_meta):
     Returns: int (total softmax key positions evaluated) or None if undetermined.
     Baseline reference = seq_len * seq_len * n_layers * n_heads.
     """
-    # BART-base: 12 layers, 12 heads
-    n_layers = 12
-    n_heads = 12
+    # Read encoder shape from the model config so this is correct for both BART-base
+    # (12 layers / 12 heads, IMDb) and the from-scratch LRA encoder (6 layers / 8 heads).
+    cfg = getattr(model, "config", None)
+    n_layers = getattr(cfg, "encoder_layers", None) or 12
+    n_heads = getattr(cfg, "encoder_attention_heads", None) or 12
     base = seq_len * n_layers * n_heads
     meta = extra_meta or {}
 
@@ -55,8 +64,11 @@ def _compute_softmax_comparisons(seq_len, model, extra_meta):
     # Exp 7: Layer-adaptive — sum over layers using per-layer k schedule
     if "k_early" in meta and "k_mid" in meta and "k_late" in meta:
         ke, km, kl = meta["k_early"], meta["k_mid"], meta["k_late"]
-        # Per-layer k: 4 early + 4 mid + 4 late (for 12 layers)
-        per_layer_k = [ke]*4 + [km]*4 + [kl]*4
+        # Split layers into early / mid / late thirds (works for 12 or 6 layers).
+        n_early = n_layers // 3
+        n_late = n_layers // 3
+        n_mid = n_layers - n_early - n_late
+        per_layer_k = [ke] * n_early + [km] * n_mid + [kl] * n_late
         return seq_len * n_heads * sum(per_layer_k)
 
     # Exp 8: Token Drop — keep_ratio fraction after drop_after_layer
@@ -150,6 +162,45 @@ def _measure_inference_latency(model, tokenizer, device, seq_len=256, n_trials=1
 
     return total_ms / n_trials
 
+
+def _measure_inference_latency_ids(model, device, seq_len, vocab_size, pair=False, n_trials=10):
+    """Latency helper for LRA models (no HF tokenizer); builds synthetic id tensors."""
+    model.eval()
+    lo = 4  # skip special-token ids
+    ids = torch.randint(lo, max(lo + 1, vocab_size), (1, seq_len), device=device)
+    am = torch.ones(1, seq_len, dtype=torch.long, device=device)
+    if pair:
+        dummy = {
+            "input_ids_a": ids, "attention_mask_a": am,
+            "input_ids_b": ids.clone(), "attention_mask_b": am.clone(),
+        }
+    else:
+        dummy = {"input_ids": ids, "attention_mask": am}
+
+    with torch.no_grad():
+        for _ in range(3):
+            _ = model(**dummy)
+
+    if torch.cuda.is_available():
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        with torch.no_grad():
+            for _ in range(n_trials):
+                _ = model(**dummy)
+        end.record()
+        torch.cuda.synchronize()
+        total_ms = start.elapsed_time(end)
+    else:
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            for _ in range(n_trials):
+                _ = model(**dummy)
+        total_ms = (time.perf_counter() - t0) * 1000
+
+    return total_ms / n_trials
+
+
 @dataclass
 class TrainConfig:
     epochs: int = 3
@@ -172,7 +223,16 @@ def compute_metrics(eval_pred):
         preds, labels = eval_pred.predictions, eval_pred.label_ids
     else:
         preds, labels = eval_pred
-    return {"accuracy": accuracy_score(labels, preds), "f1": f1_score(labels, preds)}
+    preds = np.asarray(preds)
+    labels = np.asarray(labels)
+    # Binary tasks (IMDb, LRA text/retrieval) use binary F1; multiclass (LRA ListOps,
+    # 10 classes) uses macro F1.
+    n_classes = int(max(preds.max(initial=0), labels.max(initial=0))) + 1
+    average = "binary" if n_classes <= 2 else "macro"
+    return {
+        "accuracy": accuracy_score(labels, preds),
+        "f1": f1_score(labels, preds, average=average),
+    }
 
 def device_flags(force_cpu=False):
     if force_cpu:
@@ -370,4 +430,174 @@ def run_experiment(exp_name: str, model, tokenizer, ds, cfg: TrainConfig, extra_
         f.write(f"F1: {eval_res.get('eval_f1', 'N/A')}\n")
 
     print(f"[{exp_name}] Results exported to {json_path}")
+    return eval_res
+
+
+def run_lra(
+    task: str,
+    exp_name: str,
+    model,
+    ds,
+    cfg: TrainConfig,
+    num_labels: int,
+    seq_len: int,
+    vocab_size: int,
+    pair: bool = False,
+    extra_meta: dict = None,
+    callbacks=None,
+    save_weights: bool = False,
+    track: str = "lra",
+):
+    """Train/evaluate one long-context encoder experiment and write dashboard artifacts.
+
+    Mirrors ``run_experiment`` but for the from-scratch encoder: data is already
+    fixed-length integer ids (no HF tokenizer), so it uses the default data collator and
+    a tensor-based latency probe. Artifacts land in ``benchmarks/<track>_<task>_<exp>/``
+    in the same JSON schema the dashboard ingests, tagged with ``task`` and ``seq_length``.
+    """
+    fp16, bf16, _td, use_mps = device_flags(force_cpu=cfg.use_cpu)
+    # The sparse-attention kernels use -1e9 masking sentinels that overflow fp16; for the
+    # small from-scratch LRA encoder fp16 buys little and hurts stability, so train in fp32
+    # (keep bf16 only where it is natively supported -- its range avoids the overflow).
+    fp16 = False
+    eval_accum = 1 if use_mps else 8
+    env_compile = os.environ.get("BIGGER_BIRD_TORCH_COMPILE", "0").lower() in ("1", "true", "yes", "on")
+    torch_compile = bool(cfg.torch_compile or env_compile) and not cfg.use_cpu
+
+    bench_name = f"{track}_{task}_{exp_name}"
+    out_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "benchmarks", bench_name))
+    os.makedirs(out_dir, exist_ok=True)
+
+    args = TrainingArguments(
+        output_dir=out_dir,
+        num_train_epochs=cfg.epochs,
+        per_device_train_batch_size=cfg.per_device_train_bs,
+        per_device_eval_batch_size=cfg.per_device_eval_bs,
+        gradient_accumulation_steps=cfg.grad_accum_steps,
+        learning_rate=cfg.lr,
+        weight_decay=cfg.weight_decay,
+        warmup_ratio=cfg.warmup_ratio,
+        lr_scheduler_type="cosine",
+        max_grad_norm=1.0,
+        logging_strategy="steps",
+        logging_steps=20,
+        eval_strategy="epoch",
+        save_strategy="no",
+        report_to="none",
+        fp16=fp16,
+        bf16=bf16,
+        remove_unused_columns=False,
+        dataloader_num_workers=0,
+        dataloader_pin_memory=False,
+        gradient_checkpointing=False,
+        torch_compile=torch_compile,
+        use_cpu=cfg.use_cpu,
+        optim="adamw_torch",
+        eval_accumulation_steps=eval_accum,
+    )
+
+    traj_callback = TrajectoryCallback()
+    all_callbacks = [traj_callback] + (callbacks if callbacks else [])
+
+    trainer = Trainer(
+        model=model,
+        args=args,
+        train_dataset=ds["train"],
+        eval_dataset=ds["validation"],
+        data_collator=default_data_collator,
+        compute_metrics=compute_metrics,
+        preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        callbacks=all_callbacks,
+    )
+
+    _reset_peak_memory()
+    print(f"[{bench_name}] Starting training...", flush=True)
+    start_time = time.time()
+    train_res = trainer.train()
+    train_time = time.time() - start_time
+    peak_mem_mb = _peak_memory_mb()
+    print(f"[{bench_name}] Peak memory: {peak_mem_mb:.1f} MB")
+
+    print(f"[{bench_name}] Evaluating...", flush=True)
+    eval_res = trainer.evaluate()
+
+    device = next(model.parameters()).device
+    try:
+        inf_latency_ms = _measure_inference_latency_ids(
+            model, device, seq_len=seq_len, vocab_size=vocab_size, pair=pair, n_trials=10
+        )
+        print(f"[{bench_name}] Inference latency: {inf_latency_ms:.2f} ms/seq")
+    except Exception as e:
+        inf_latency_ms = None
+        print(f"[{bench_name}] Inference latency measurement failed: {e}")
+
+    softmax_comparisons = _compute_softmax_comparisons(seq_len, model, extra_meta)
+    if softmax_comparisons:
+        cfg_obj = getattr(model, "config", None)
+        n_layers = getattr(cfg_obj, "encoder_layers", None) or 12
+        n_heads = getattr(cfg_obj, "encoder_attention_heads", None) or 12
+        baseline_comparisons = seq_len * seq_len * n_layers * n_heads
+        reduction_pct = (1 - softmax_comparisons / baseline_comparisons) * 100
+        print(f"[{bench_name}] Softmax comparisons: {softmax_comparisons:,} ({reduction_pct:.1f}% vs baseline)")
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    results = {
+        "experiment_metadata": {
+            "name": exp_name,
+            "task": f"{track}_{task}",
+            "seq_length": seq_len,
+            "timestamp": timestamp,
+            "training_config": {
+                "epochs": cfg.epochs,
+                "batch_size": cfg.per_device_train_bs,
+                "accumulation_steps": cfg.grad_accum_steps,
+                "learning_rate": cfg.lr,
+                "warmup": cfg.warmup_ratio,
+            },
+            "dataset_info": {
+                "train_size": len(ds["train"]),
+                "eval_size": len(ds["validation"]),
+                "max_seq_len": seq_len,
+                "num_labels": num_labels,
+                "vocab_size": vocab_size,
+                "fixed_length": True,
+            },
+            "environment": {
+                "use_mps": use_mps,
+                "fp16": fp16,
+                "peak_memory_mb": peak_mem_mb,
+            },
+            "model_config": {**(extra_meta or {}), "task": f"{track}_{task}", "seq_length": seq_len},
+        },
+        "performance_metrics": {
+            "training_time_seconds": train_time,
+            "peak_memory_mb": peak_mem_mb,
+            "inference_latency_ms": inf_latency_ms,
+            "softmax_comparisons": softmax_comparisons,
+            "train": train_res.metrics,
+            "eval": eval_res,
+            "trajectory": traj_callback.trajectory,
+        },
+    }
+
+    if save_weights:
+        weights_dir = os.path.join(out_dir, f"weights_{timestamp}")
+        os.makedirs(weights_dir, exist_ok=True)
+        torch.save(model.state_dict(), os.path.join(weights_dir, "model_state.pt"))
+        results["experiment_metadata"]["weights_path"] = weights_dir
+        print(f"[{bench_name}] Weights saved to {weights_dir}")
+
+    json_path = os.path.join(out_dir, f"eval_{timestamp}.json")
+    with open(json_path, "w") as f:
+        json.dump(results, f, indent=4)
+
+    res_path = os.path.join(out_dir, "results.txt")
+    with open(res_path, "w") as f:
+        f.write(f"Experiment: {bench_name} | Date: {timestamp}\n")
+        f.write(f"Task: {track}_{task} | Seq: {seq_len}\n")
+        f.write(f"Training Time: {train_time:.2f}s\n")
+        f.write(f"Accuracy: {eval_res.get('eval_accuracy', 'N/A')}\n")
+        f.write(f"F1: {eval_res.get('eval_f1', 'N/A')}\n")
+
+    print(f"[{bench_name}] Results exported to {json_path}")
     return eval_res
