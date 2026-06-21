@@ -133,6 +133,7 @@ def load_efficiency() -> list[dict]:
             return
         if priority > cur_pri:
             return
+        # Same priority: prefer successful runs, then newer timestamp.
         if cur_row.get("oom") and not row.get("oom"):
             merged[key] = (row, priority, ts)
             return
