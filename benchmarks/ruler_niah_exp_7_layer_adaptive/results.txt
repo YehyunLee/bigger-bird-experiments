@@ -1,5 +1,5 @@
-Experiment: ruler_niah_exp_7_layer_adaptive | Date: 20260622_041522
-Task: ruler_niah | Seq: 4096
-Training Time: 54.55s
-Accuracy: 0.085
-F1: 0.015668202764976956
+Experiment: ruler_niah_exp_7_layer_adaptive | Date: 20260622_120620
+Task: ruler_niah | Seq: 16384
+Training Time: 346.78s
+Accuracy: 0.09
+F1: 0.01651376146788991

@@ -1,5 +1,5 @@
-Experiment: ruler_niah_exp_1_deepseek_topk | Date: 20260622_042506
-Task: ruler_niah | Seq: 4096
-Training Time: 53.16s
-Accuracy: 0.085
-F1: 0.015668202764976956
+Experiment: ruler_niah_exp_1_deepseek_topk | Date: 20260622_122818
+Task: ruler_niah | Seq: 32768
+Training Time: 770.45s
+Accuracy: 0.105
+F1: 0.019004524886877826
