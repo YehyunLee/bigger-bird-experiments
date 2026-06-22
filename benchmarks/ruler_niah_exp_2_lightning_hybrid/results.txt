@@ -1,5 +1,5 @@
-Experiment: ruler_niah_exp_2_lightning_hybrid | Date: 20260622_034607
+Experiment: ruler_niah_exp_2_lightning_hybrid | Date: 20260622_041313
 Task: ruler_niah | Seq: 4096
-Training Time: 900.03s
+Training Time: 900.72s
 Accuracy: 0.085
 F1: 0.015668202764976956
