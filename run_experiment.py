@@ -36,6 +36,7 @@ from exp_10_gqa_sparse.model import PatchedModel as GQASparseModel
 from exp_11_nsa.model import PatchedModel as NSAModel
 from exp_12_s2_hhst.model import PatchedModel as S2HHSTModel
 from exp_13_dynamic_context.model import PatchedModel as DynamicContextModel
+from exp_14_token_drop_deepseek.model import PatchedModel as TokenDropDeepSeekModel
 
 # Compute presets
 COMPUTE_CONFIGS = {
@@ -132,6 +133,11 @@ EXPERIMENT_CONFIGS = {
         DynamicContextModel,
         {"drop_after_layer": 3, "target_budget": 4096, "chunk_size": 8192},
     ),
+    14: (
+        "exp_14_token_drop_deepseek",
+        TokenDropDeepSeekModel,
+        {"drop_after_layer": 3, "drop_ratio": 0.3, "top_k": 64, "low_rank_dim": 16, "use_triton": True},
+    ),
 }
 
 def main():
@@ -154,7 +160,7 @@ Examples:
         """
     )
     
-    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13],
+    parser.add_argument("--exp", type=int, choices=[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],
                        help="Experiment number (0=baseline, 1-4=original sparse methods, 5-10=new hybrid/advanced ideas, 11=NSA, 12=S2-HHST, 13=Dynamic Context)")
     parser.add_argument("--size", type=str, choices=["small", "medium", "big", "xl", "long"],
                        help="Compute size preset")

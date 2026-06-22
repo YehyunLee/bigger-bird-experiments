@@ -28,6 +28,7 @@ Standard sparse attention models, such as Big Bird and Longformer, utilize fixed
 11. **Native Sparse Attention — NSA (exp_11_nsa)**: TODO
 12. **S2-HHST (exp_12_s2_hhst)**: TODO
 13. **Dynamic Context Window (exp_13_dynamic_context)**: Builds on Token Drop to accept **arbitrarily long inputs** by capping the post-early-layer attention to a fixed token budget. After `drop_after_layer` dense layers, tokens are scored by hidden-state L2 norm and exactly `target_budget` tokens are kept — regardless of input length (4k, 100k, 1M). For very long inputs (> chunk_size), early layers run in independent chunks so the full O(n²) attention matrix never materialises. Late layers always run on the fixed budget, giving O(budget²) attention cost. Defaults: `drop_after_layer=3`, `target_budget=4096`, `chunk_size=8192`.
+14. **Token Drop + DeepSeek Top-K (exp_14_token_drop_deepseek)**: Combines Token Dropping with DeepSeek-style sparse attention for **two levels of sparsity**. Early layers run dense on the full sequence to extract local syntax. After `drop_after_layer`, low-importance tokens are dropped. Remaining layers use **DeepSeek low-rank top-K routing** on the shorter sequence — giving both reduced sequence length AND fewer keys per query. Defaults: `drop_after_layer=3`, `drop_ratio=0.3`, `top_k=64`, `low_rank_dim=16`.
 
 ## Architecture Diagrams
 

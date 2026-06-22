@@ -1,0 +1,5 @@
+Experiment: ruler_niah_exp_6_deepseek_pbs | Date: 20260622_034709
+Task: ruler_niah | Seq: 4096
+Training Time: 52.58s
+Accuracy: 0.085
+F1: 0.015668202764976956
