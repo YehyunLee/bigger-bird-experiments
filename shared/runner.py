@@ -97,6 +97,16 @@ def _compute_softmax_comparisons(seq_len, model, extra_meta):
         late = (n_layers - dal) * n_heads * budget * budget
         return int(early + late)
 
+    # Exp 14: Token Drop + DeepSeek Top-K — dense early, top-k late on shorter seq
+    if "drop_after_layer" in meta and "drop_ratio" in meta and "top_k" in meta and "low_rank_dim" in meta:
+        dal = meta["drop_after_layer"]
+        keep = 1.0 - meta["drop_ratio"]
+        top_k = meta["top_k"]
+        early = dal * n_heads * seq_len * seq_len
+        late_len = max(top_k, int(seq_len * keep))
+        late = (n_layers - dal) * n_heads * late_len * top_k
+        return int(early + late)
+
     # Exp 9: Attention Speculation — window + anchors per query
     if "window_size" in meta and "num_anchors" in meta:
         M = meta["window_size"] + meta["num_anchors"]

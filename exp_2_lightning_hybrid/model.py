@@ -188,3 +188,15 @@ class PatchedModel(nn.Module):
     @property
     def config(self):
         return self.model.config
+
+    def gradient_checkpointing_enable(self, **kwargs):
+        if hasattr(self.model, "gradient_checkpointing_enable"):
+            self.model.gradient_checkpointing_enable(**kwargs)
+
+    def gradient_checkpointing_disable(self):
+        if hasattr(self.model, "gradient_checkpointing_disable"):
+            self.model.gradient_checkpointing_disable()
+
+    @property
+    def is_gradient_checkpointing(self):
+        return getattr(self.model, "is_gradient_checkpointing", False)
