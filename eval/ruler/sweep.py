@@ -61,7 +61,7 @@ def _result_from_eval(task, exp, exp_name, seq, depth, data, status):
     }
 
 
-def run_single(task, exp, seq, depth, size, cpu, skip_existing=False):
+def run_single(task, exp, seq, depth, size, cpu, skip_existing=False, batch=None, grad_checkpoint=False):
     exp_name = EXPERIMENT_CONFIGS[exp][0]
     train_samples = RULER_COMPUTE[size]["train_samples"]
     matcher = lambda d: _match_ruler(d, seq, depth, train_samples)
@@ -77,6 +77,10 @@ def run_single(task, exp, seq, depth, size, cpu, skip_existing=False):
     cmd = ["--task", task, "--exp", str(exp), "--seq", str(seq), "--depth", str(depth), "--size", size]
     if cpu:
         cmd.append("--cpu")
+    if batch is not None:
+        cmd += ["--batch", str(batch)]
+    if grad_checkpoint:
+        cmd.append("--grad-checkpoint")
 
     print(f"\n{'='*70}\nRULER sweep: {task} | {exp_name} | seq={seq} depth={depth}\n{'='*70}")
     res = run_module("eval.ruler.run", cmd)
@@ -109,6 +113,8 @@ def main():
     parser.add_argument("--depths", default="", help="Override needle depths (e.g. 0.1,0.5,0.9)")
     parser.add_argument("--size", default="ruler-report", help="Compute preset")
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument("--batch", type=int, default=None, help="Override batch size")
+    parser.add_argument("--grad-checkpoint", action="store_true", help="Enable gradient checkpointing")
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
 
@@ -124,7 +130,7 @@ def main():
             for depth in depths:
                 for exp in exps:
                     all_results.append(
-                        run_single(task, exp, seq, depth, args.size, args.cpu, args.skip_existing)
+                        run_single(task, exp, seq, depth, args.size, args.cpu, args.skip_existing, args.batch, args.grad_checkpoint)
                     )
 
     print("\n" + "=" * 120)

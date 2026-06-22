@@ -59,7 +59,7 @@ def _result_from_eval(task, exp, exp_name, seq, data, status):
     }
 
 
-def run_single(task, exp, seq, size, data_dir, cpu, skip_existing=False):
+def run_single(task, exp, seq, size, data_dir, cpu, skip_existing=False, batch=None, grad_checkpoint=False):
     exp_name = EXPERIMENT_CONFIGS[exp][0]
     train_samples = LRA_COMPUTE[size]["train_samples"]
 
@@ -79,6 +79,10 @@ def run_single(task, exp, seq, size, data_dir, cpu, skip_existing=False):
         cmd += ["--data-dir", data_dir]
     if cpu:
         cmd.append("--cpu")
+    if batch is not None:
+        cmd += ["--batch", str(batch)]
+    if grad_checkpoint:
+        cmd.append("--grad-checkpoint")
 
     print(f"\n{'='*70}\nLRA sweep: {task} | {exp_name} | seq={seq}\n{'='*70}")
     res = run_module("eval.lra.run", cmd)
@@ -114,6 +118,8 @@ def main():
     parser.add_argument("--data-dir", default=None, help="Data dir for retrieval (AAN)")
     parser.add_argument("--skip-existing", action="store_true",
                         help="Reuse existing eval artifacts for the same task/exp/seq/budget")
+    parser.add_argument("--batch", type=int, default=None, help="Override batch size")
+    parser.add_argument("--grad-checkpoint", action="store_true", help="Enable gradient checkpointing")
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
 
@@ -127,7 +133,7 @@ def main():
         for seq in seqs:
             for exp in exps:
                 all_results.append(
-                    run_single(task, exp, seq, args.size, args.data_dir, args.cpu, args.skip_existing)
+                    run_single(task, exp, seq, args.size, args.data_dir, args.cpu, args.skip_existing, args.batch, args.grad_checkpoint)
                 )
 
     print("\n" + "=" * 110)

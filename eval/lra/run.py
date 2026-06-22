@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--compile", action="store_true")
     parser.add_argument("--save-weights", action="store_true")
+    parser.add_argument("--grad-checkpoint", action="store_true", help="Enable gradient checkpointing")
     parser.add_argument("--list", action="store_true", help="List presets and experiments")
     args = parser.parse_args()
 
@@ -102,6 +103,9 @@ def main():
         num_labels=data["num_labels"],
         pair=data["pair"],
     )
+
+    if args.grad_checkpoint:
+        model.gradient_checkpointing_enable()
 
     train_cfg = TrainConfig(
         epochs=compute["epochs"],
