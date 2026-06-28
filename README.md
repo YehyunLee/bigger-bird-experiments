@@ -358,6 +358,23 @@ After running experiments, compare across all metrics:
 python viz/compare_experiments.py
 ```
 
+### Interactive Dashboard
+Open `dashboard.html` in any browser for a fully interactive, self-contained benchmark explorer (all data embedded inline):
+
+```bash
+# Regenerate from latest JSON/CSV benchmarks
+python scripts/build_dashboard.py
+open dashboard.html
+```
+
+**Tabs:**
+- **Overview** — F1 vs seq length, attention forward time, peak memory, softmax comparisons
+- **Complexity** — log-log slope verification, linear-scale short/long sequence plots
+- **Efficiency** — per-sequence-length bar charts for F1, train time, latency, memory
+- **All Runs** — sortable/filterable table of every training run
+- **Radar** — 6-axis multi-factor comparison (F1, Accuracy, Speed, Memory, Train Efficiency, Sparsity) with overall score
+- **Ranking** — **cross-track overall leaderboard**: computes per-track radar scores on IMDb, LRA, and RULER, then ranks experiments by the mean across all three tracks. Pick any sequence length to see which method dominates at that scale.
+
 ## Technical Stack
 
 *   **Frameworks**: Python, PyTorch, Hugging Face Transformers, Accelerate.
