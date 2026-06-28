@@ -77,6 +77,7 @@
   <div class="tab" onclick="switchTab('efficiency')">Efficiency</div>
   <div class="tab" onclick="switchTab('table')">All Runs</div>
   <div class="tab" onclick="switchTab('radar')">Radar</div>
+  <div class="tab" onclick="switchTab('ranking')">Ranking</div>
   <div class="tab" onclick="switchTab('context')">Project Context</div>
 </div>
 
@@ -218,6 +219,39 @@
           <tr><td>Sparsity</td><td>1 / softmax comparisons</td><td style="color:#15803d">↑ more sparse better</td></tr>
         </tbody>
       </table>
+    </div>
+  </div>
+</div>
+
+<!-- RANKING -->
+<div id="page-ranking" class="page">
+  <div class="controls">
+    <span><label>Sequence Length:</label>
+    <select id="rank-seq" onchange="renderRanking()"></select></span>
+    <span style="color:var(--muted);font-size:12px;margin-left:8px">Cross-track overall score = mean of 6 normalized axes (F1, Accuracy, Speed, Memory, Train Eff., Sparsity) averaged across all tracks.</span>
+  </div>
+  <div class="chart-grid">
+    <div class="card wide">
+      <h3>Cross-Track Overall Leaderboard</h3>
+      <p style="color:var(--muted);font-size:12px;margin-bottom:12px">Per-track score is the radar area (0–100) at the selected sequence length. Overall = mean of available tracks.</p>
+      <table id="rank-table" style="font-size:13px">
+        <thead>
+          <tr>
+            <th>Rank</th><th>Experiment</th>
+            <th>IMDb Score</th><th>LRA Score</th><th>RULER Score</th>
+            <th>Overall</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="rank-tbody"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Overall Score by Experiment</h3>
+      <canvas id="c-rank-overall" style="max-height:320px"></canvas>
+    </div>
+    <div class="card">
+      <h3>Track Coverage</h3>
+      <canvas id="c-rank-tracks" style="max-height:320px"></canvas>
     </div>
   </div>
 </div>
@@ -680,7 +714,7 @@ function onTrackChange(){
   rendered['overview']=true;
   renderOverview();
   const active=document.querySelector('.page.active')?.id?.replace('page-','');
-  if(active && active!=='overview' && active!=='context'){
+  if(active && active!=='overview' && active!=='context' && active!=='ranking'){
     rendered[active]=true;
     if(active==='complexity') renderComplexity();
     if(active==='efficiency') renderEfficiency();
@@ -984,6 +1018,142 @@ function renderRadar(){
   });
 }
 
+// ── RANKING ────────────────────────────────────────────────────────────
+function _radarScore(rows, expNum) {
+  const row = rows.find(d => d.exp_num === expNum);
+  if (!row || row.oom) return 0;
+  const axes = ['F1','Accuracy','Speed','Memory','Train Eff.','Sparsity'];
+  const rawAll = rows.map(d => ({
+    exp_num: d.exp_num,
+    F1: d.oom || d.f1 == null ? 0 : d.f1,
+    Accuracy: d.oom || d.accuracy == null ? 0 : d.accuracy,
+    Speed: d.oom || !d.inference_latency_ms ? 0 : 1/d.inference_latency_ms,
+    Memory: d.oom || !d.peak_memory_mb ? 0 : 1/d.peak_memory_mb,
+    'Train Eff.': d.oom || !d.train_time_s ? 0 : 1/d.train_time_s,
+    Sparsity: d.oom || !d.softmax_comparisons ? 0 : 1/d.softmax_comparisons
+  }));
+  const idx = rawAll.findIndex(r => r.exp_num === expNum);
+  if (idx < 0) return 0;
+  let score = 0;
+  axes.forEach(ax => {
+    const vals = rawAll.map(r => r[ax]);
+    const mn = Math.min(...vals), mx = Math.max(...vals);
+    const norm = mx === mn ? (vals[idx] > 0 ? 1 : 0) : (vals[idx] - mn) / (mx - mn);
+    score += norm;
+  });
+  return +(score / axes.length * 100).toFixed(1);
+}
+
+function _findClosestSeq(rows, targetSeq) {
+  const seqs = [...new Set(rows.map(d => d.seq_length))].sort((a,b) => a-b);
+  if (!seqs.length) return null;
+  let closest = seqs[0];
+  for (const s of seqs) {
+    if (Math.abs(s - targetSeq) < Math.abs(closest - targetSeq)) closest = s;
+  }
+  return closest;
+}
+
+function renderRanking() {
+  const targetSeq = parseInt(document.getElementById('rank-seq').value);
+  const experiments = [...Array(MAX_EXP + 1).keys()];
+
+  const trackScores = {};
+  TRACKS.forEach(track => {
+    const trackRows = EFFICIENCY.filter(d => (d.track || 'imdb') === track);
+    const actualSeq = _findClosestSeq(trackRows, targetSeq);
+    const seqRows = trackRows.filter(d => d.seq_length === actualSeq);
+    trackScores[track] = {};
+    experiments.forEach(e => {
+      trackScores[track][e] = _radarScore(seqRows, e);
+    });
+  });
+
+  const rankings = experiments.map(e => {
+    const scores = TRACKS.map(t => trackScores[t][e]);
+    const valid = scores.filter(s => s > 0);
+    const overall = valid.length ? +(valid.reduce((a,b) => a+b, 0) / valid.length).toFixed(1) : 0;
+    const coverage = valid.length;
+    return { exp_num: e, overall, scores: Object.fromEntries(TRACKS.map((t,i) => [t, scores[i]])), coverage };
+  }).sort((a,b) => b.overall - a.overall);
+
+  // Table
+  const tbody = document.getElementById('rank-tbody');
+  tbody.innerHTML = rankings.map((r, i) => {
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i+1);
+    const expName = EXP_NAMES[r.exp_num] || `exp_${r.exp_num}`;
+    const imdb = r.scores.imdb > 0 ? r.scores.imdb.toFixed(1) : '—';
+    const lra = r.scores.lra > 0 ? r.scores.lra.toFixed(1) : '—';
+    const ruler = r.scores.ruler > 0 ? r.scores.ruler.toFixed(1) : '—';
+    const status = r.coverage === 3 ? '<span class="pill pill-green">All Tracks</span>' :
+                   r.coverage === 2 ? '<span class="pill pill-yellow">2 Tracks</span>' :
+                   r.coverage === 1 ? '<span class="pill pill-blue">1 Track</span>' :
+                   '<span class="pill pill-gray">No Data</span>';
+    const highlight = i === 0 ? 'style="background:rgba(30,64,175,.06);font-weight:600"' : '';
+    return `<tr ${highlight}>
+      <td>${medal}</td>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${COLORS[r.exp_num]};margin-right:6px"></span>${expName}</td>
+      <td>${imdb}</td><td>${lra}</td><td>${ruler}</td>
+      <td style="font-weight:700">${r.overall.toFixed(1)}</td>
+      <td>${status}</td>
+    </tr>`;
+  }).join('');
+
+  // Overall bar chart
+  const withData = rankings.filter(r => r.overall > 0);
+  mkChart('c-rank-overall', {
+    type: 'bar',
+    data: {
+      labels: withData.map(r => EXP_NAMES[r.exp_num] || `exp_${r.exp_num}`),
+      datasets: [{
+        label: 'Overall Score',
+        data: withData.map(r => r.overall),
+        backgroundColor: withData.map(r => COLORS[r.exp_num] + 'bb'),
+        borderColor: withData.map(r => COLORS[r.exp_num]),
+        borderWidth: 1
+      }]
+    },
+    options: deepMerge(DARK_OPTS, {
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { min: 0, max: 100, title: { display: true, text: 'Score (0–100)', color: '#6c757d' }, grid: GRID, ticks: TICK },
+        x: { ticks: { ...TICK, maxRotation: 45, font: { size: 10 } } }
+      }
+    })
+  });
+
+  // Track coverage grouped bar
+  mkChart('c-rank-tracks', {
+    type: 'bar',
+    data: {
+      labels: withData.map(r => EXP_NAMES[r.exp_num] || `exp_${r.exp_num}`),
+      datasets: TRACKS.map((track, ti) => ({
+        label: TRACK_LABELS[track],
+        data: withData.map(r => r.scores[track] || 0),
+        backgroundColor: [
+          'rgba(99,102,241,0.7)', 'rgba(16,185,129,0.7)', 'rgba(239,68,68,0.7)'
+        ][ti]
+      }))
+    },
+    options: deepMerge(DARK_OPTS, {
+      plugins: { legend: { position: 'bottom' } },
+      scales: {
+        y: { min: 0, max: 100, title: { display: true, text: 'Score (0–100)', color: '#6c757d' }, grid: GRID, ticks: TICK },
+        x: { ticks: { ...TICK, maxRotation: 45, font: { size: 10 } } }
+      }
+    })
+  });
+}
+
+function buildRankSeqSelect() {
+  const sel = document.getElementById('rank-seq');
+  const allSeqs = [...new Set(EFFICIENCY.map(d => d.seq_length))].sort((a,b) => a-b);
+  sel.innerHTML = allSeqs.map(s => `<option value="${s}">${formatSeq(s)}</option>`).join('');
+  const pick = allSeqs.includes(4096) ? 4096 : (allSeqs.includes(1024) ? 1024 : allSeqs[allSeqs.length-1]);
+  sel.value = String(pick);
+  sel.onchange = renderRanking;
+}
+
 // ── TABLE ─────────────────────────────────────────────────────────────
 function renderTable(){
   const filt=document.getElementById('tbl-filter').value;
@@ -1055,6 +1225,7 @@ function switchTab(name){
     if(name==='complexity') renderComplexity();
     if(name==='efficiency') renderEfficiency();
     if(name==='radar') renderRadar();
+    if(name==='ranking') renderRanking();
     if(name==='table') renderTable();
   }
 }
@@ -1064,6 +1235,7 @@ initActiveExps();
 initRadarActiveExps();
 buildSeqSelect('eff-seq', renderEfficiency, 1024);
 buildSeqSelect('radar-seq', renderRadar, 1024);
+buildRankSeqSelect();
 buildExpCheckboxes();
 buildRadarCheckboxes();
 buildTableFilters();
